@@ -24,6 +24,7 @@ class MatchCriteria:
     direction_match: bool
     description_match: bool
     user_match: bool
+    is_direct_match: bool
 
 
 @dataclass
@@ -31,7 +32,7 @@ class Match:
     """Data class for a matched transaction pair"""
     platform_transaction: Dict[str, Any]
     bank_transaction: Dict[str, Any]
-    checkbook_payment: Dict[str, Any]
+    checkbook_payment: Optional[Dict[str, Any]]
     match_date: str
     match_criteria: MatchCriteria
 
@@ -79,15 +80,18 @@ class SimpleReceivedTransactionMatcher:
         self.user_id = user_id
         self.start_date = start_date
         self.end_date = end_date
+        self.checkbook_payments = self._get_checkbook_payments()
+        self._potential_bank_transactions = self._filter_potential_bank_transactions()
         
-        # Fetch checkbook payments from API
-        self.checkbook_payments = self._fetch_checkbook_payments()
-        
-        # Pre-process data for matching
+        # This was missing the call to _preprocess_data to initialize _valid_checkbook_payments
         self._preprocess_data()
 
-    def _fetch_checkbook_payments(self) -> List[Dict[str, Any]]:
-        """Fetch checkbook payments from the API"""
+        # Keep track of used transaction IDs to prevent double-matching
+        self.used_bank_transaction_ids = set()
+        self.used_checkbook_payment_ids = {} # Store cp_id -> pt_id mapping
+
+    def _get_checkbook_payments(self):
+        """Fetches checkbook payments for the specified user and date range."""
         try:
             # API expects user_id as an array
             params = {
@@ -106,19 +110,19 @@ class SimpleReceivedTransactionMatcher:
             print(f"Error fetching checkbook payments: {e}")
             return []
 
+    def _filter_potential_bank_transactions(self):
+        """Filters bank transactions to find potential received funds (negative amounts)."""
+        return [
+            bt for bt in self.bank_transactions
+            if bt.get('amount', 0) < 0  # Negative amounts for received funds
+        ]
+
     def _preprocess_data(self):
         """Pre-process data for matching"""
         # Filter received platform transactions (funds coming in)
         self._received_platform_transactions = [
             pt for pt in self.platform_transactions 
             if pt.get('Transaction_Type') == 'received'  # Different from 'returned'
-        ]
-        
-        # Filter bank transactions (negative amounts for received funds)
-        # Note: Received funds typically show as negative amounts in bank transactions
-        self._potential_bank_transactions = [
-            bt for bt in self.bank_transactions
-            if bt.get('amount', 0) < 0  # Negative amounts for received funds
         ]
         
         # Filter checkbook payments that match our criteria for received transactions
@@ -150,7 +154,7 @@ class SimpleReceivedTransactionMatcher:
         
         return True
 
-    def _find_matching_checkbook_payment(self, bank_transaction: Dict[str, Any], platform_transaction: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _find_matching_checkbook_payment(self, bank_transaction: Dict[str, Any], platform_transaction: Dict[str, Any], bypass_used_check: bool = False) -> Optional[Dict[str, Any]]:
         """Find matching checkbook payment for a bank transaction"""
         bank_amount = abs(float(bank_transaction.get('amount', 0)))
         bank_date = datetime.fromisoformat(bank_transaction.get('date', '').replace('Z', '+00:00'))
@@ -161,6 +165,10 @@ class SimpleReceivedTransactionMatcher:
         matching_payments = []
         
         for cp in self._valid_checkbook_payments:
+            # If we are not bypassing, skip checkbook payments that have already been used.
+            if not bypass_used_check and cp.get('id') in self.used_checkbook_payment_ids:
+                continue
+
             # Check if recipient matches user_id
             if cp.get('recipient') != self.user_id:
                 continue
@@ -201,9 +209,14 @@ class SimpleReceivedTransactionMatcher:
         best_payment = None
         smallest_date_diff = None
         
-        # First, try to find exact date matches
+        # If we are not bypassing, only consider checkbook payments that have not been used.
+        payments_to_consider = matching_payments
+        if not bypass_used_check:
+            payments_to_consider = [p for p in matching_payments if p.get('id') not in self.used_checkbook_payment_ids]
+
+        # First, try to find exact date matches from the available payments
         same_date_payments = []
-        for cp in matching_payments:
+        for cp in payments_to_consider:
             try:
                 checkbook_timestamp = cp.get('date', 0)
                 if checkbook_timestamp:
@@ -230,8 +243,8 @@ class SimpleReceivedTransactionMatcher:
                 except (ValueError, TypeError):
                     continue
         else:
-            # No same-date payments, fall back to closest date match
-            for cp in matching_payments:
+            # No same-date payments, fall back to closest date match from available payments
+            for cp in payments_to_consider:
                 try:
                     checkbook_timestamp = cp.get('date', 0)
                     if checkbook_timestamp:
@@ -283,9 +296,46 @@ class SimpleReceivedTransactionMatcher:
         matched_bank_transaction_ids = set()
         matched_platform_transaction_ids = set()
         matched_checkbook_payment_ids = set()
-        
-        # Match each received platform transaction
+
+        # Create a quick lookup for bank transactions by ID
+        bank_transactions_by_id = {bt['id']: bt for bt in self.bank_transactions}
+
+        # --- Step 1: Process direct matches from 'related_bank_transaction' ---
         for pt in self._received_platform_transactions:
+            related_bt_info = pt.get('related_bank_transaction')
+            if related_bt_info and isinstance(related_bt_info, list) and len(related_bt_info) > 0:
+                related_bt_id = related_bt_info[0].get('id')
+                
+                # Find the bank transaction in our fetched list
+                bank_transaction = bank_transactions_by_id.get(related_bt_id)
+                
+                if bank_transaction:
+                    # Create a direct match, bypassing all other logic
+                    match_criteria = MatchCriteria(
+                        amount_match=True, date_match=True, checkbook_payment_exists=False,
+                        recipient_match=False, direction_match=False, description_match=False,
+                        user_match=True, is_direct_match=True
+                    )
+                    
+                    match = Match(
+                        platform_transaction=pt,
+                        bank_transaction=bank_transaction,
+                        checkbook_payment=None,  # No checkbook payment for direct matches
+                        match_date=datetime.now().isoformat(),
+                        match_criteria=match_criteria
+                    )
+                    
+                    matches.append(match)
+                    # Add to matched sets to exclude from next step
+                    matched_platform_transaction_ids.add(pt.get('id'))
+                    matched_bank_transaction_ids.add(bank_transaction.get('id'))
+        
+        # --- Step 2: Process remaining transactions with standard logic ---
+        for pt in self._received_platform_transactions:
+            # Skip transactions that were already matched directly
+            if pt.get('id') in matched_platform_transaction_ids:
+                continue
+
             platform_amount = float(pt.get('Amount', 0))
             platform_date = datetime.fromisoformat(pt.get('Date', '').replace('Z', '+00:00'))
             
@@ -326,19 +376,24 @@ class SimpleReceivedTransactionMatcher:
                     })
             
             # If we found matching bank transactions, select the best one
-            if matching_bank_transactions:
-                # Prioritize exact date matches, then closest date
-                exact_date_matches = [m for m in matching_bank_transactions if m['is_exact_date_match']]
-                
-                if exact_date_matches:
-                    # Use exact date match with closest time
-                    best_match = min(exact_date_matches, key=lambda m: m['date_diff'])
-                else:
-                    # No exact date match, use closest date
-                    best_match = min(matching_bank_transactions, key=lambda m: m['date_diff'])
-                
+            best_match = None
+            # Prioritize exact date matches, then closest date
+            exact_date_matches = [m for m in matching_bank_transactions if m['is_exact_date_match']]
+            
+            if exact_date_matches:
+                # Use exact date match with closest time
+                best_match = min(exact_date_matches, key=lambda m: m['date_diff'])
+            elif matching_bank_transactions:
+                # No exact date match, use closest date
+                best_match = min(matching_bank_transactions, key=lambda m: m['date_diff'])
+            
+            if best_match:
                 bt = best_match['bank_transaction']
                 checkbook_payment = best_match['checkbook_payment']
+                
+                # Final check to ensure the selected checkbook payment is not already used
+                if checkbook_payment.get('id') in self.used_checkbook_payment_ids:
+                    continue # This payment was claimed by a higher-priority transaction, so skip
                 
                 # Create match criteria
                 match_criteria = MatchCriteria(
@@ -348,7 +403,8 @@ class SimpleReceivedTransactionMatcher:
                     recipient_match=checkbook_payment.get('recipient') == self.user_id,
                     direction_match=checkbook_payment.get('direction') == 'OUTGOING',
                     description_match=self._is_valid_checkbook_payment_for_received(checkbook_payment),
-                    user_match=True
+                    user_match=True,
+                    is_direct_match=False
                 )
                 
                 match = Match(
@@ -362,7 +418,7 @@ class SimpleReceivedTransactionMatcher:
                 matches.append(match)
                 matched_bank_transaction_ids.add(bt.get('id'))
                 matched_platform_transaction_ids.add(pt.get('id')) # Ensure this is always added
-                matched_checkbook_payment_ids.add(checkbook_payment.get('id'))
+                self.used_checkbook_payment_ids[checkbook_payment.get('id')] = pt.get('id')
         
         # Calculate summary statistics
         total_received = len(self._received_platform_transactions)

@@ -1,6 +1,7 @@
 import json
 import requests
 import os
+import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -28,13 +29,22 @@ def fetch_pro_players():
         print(f"Fatal: Could not fetch players. {e}")
         return []
 
-def analyze_player_for_betting_metrics(player, all_platform_transactions, date_ranges):
+def analyze_player_for_betting_metrics(player, start_date_str, end_date_str, date_ranges):
     """Analyzes a single player's data to extract betting bank account metrics."""
     player_id = player.get('id')
+    player_name = player.get('name', 'Unknown')
+    print(f"Processing player {player_id} ({player_name})...")
     
     try:
-        player_platform_transactions = [pt for pt in all_platform_transactions if pt.get('User_ID') == player_id]
-        
+        # Fetch platform transactions specifically for this player
+        pt_response = requests.get(
+            PLATFORM_TRANSACTIONS_API_URL,
+            params={'user_id': player_id, 'start_date': start_date_str, 'end_date': end_date_str},
+            timeout=120
+        )
+        pt_response.raise_for_status()
+        player_platform_transactions = pt_response.json()
+
         bank_response = requests.get(
             BANK_TRANSACTIONS_API_URL,
             params={'player_id': player_id, 'start_date': date_ranges['bank_start'], 'end_date': date_ranges['bank_end']},
@@ -66,7 +76,8 @@ def analyze_player_for_betting_metrics(player, all_platform_transactions, date_r
             "matched_betting_returned": matched_betting_returned
         }
 
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        print(f"  -> Error processing player {player_id}: {e}")
         return None # Skip players with API errors
 
 def calculate_betting_bank_metrics(num_players, start_date_str, end_date_str):
@@ -86,25 +97,27 @@ def calculate_betting_bank_metrics(num_players, start_date_str, end_date_str):
     pro_players = fetch_pro_players()
     if not pro_players: return
 
-    print("Fetching all platform transactions...")
-    pt_response = requests.get(PLATFORM_TRANSACTIONS_API_URL, params={'start_date': start_date_str, 'end_date': end_date_str}, timeout=120)
-    all_platform_transactions = pt_response.json()
-    
-    players_to_analyze = pro_players[:num_players]
-    
+    if num_players > 0:
+        players_to_analyze = pro_players[:num_players]
+        print(f"\nAnalyzing the first {len(players_to_analyze)} 'Pro' players...")
+    else:
+        players_to_analyze = pro_players
+        print(f"\nAnalyzing all {len(players_to_analyze)} 'Pro' players...")
+
     # Aggregate metrics
     total_metrics = {
         "total_betting_received": 0, "matched_betting_received": 0,
         "total_betting_returned": 0, "matched_betting_returned": 0
     }
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(analyze_player_for_betting_metrics, player, all_platform_transactions, date_ranges) for player in players_to_analyze]
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                for key in total_metrics:
-                    total_metrics[key] += result[key]
+    # Process players sequentially to respect the 1-second delay request
+    for player in players_to_analyze:
+        result = analyze_player_for_betting_metrics(player, start_date_str, end_date_str, date_ranges)
+        if result:
+            for key in total_metrics:
+                total_metrics[key] += result[key]
+        
+        time.sleep(1) # Wait for 1 second before the next player
 
     # Calculate and display the final percentages
     received_match_rate = (total_metrics['matched_betting_received'] / total_metrics['total_betting_received'] * 100) if total_metrics['total_betting_received'] > 0 else 0
@@ -125,8 +138,8 @@ def calculate_betting_bank_metrics(num_players, start_date_str, end_date_str):
     print("\n" + "="*50)
 
 if __name__ == "__main__":
-    NUM_PLAYERS_TO_ANALYZE = 50
-    START_DATE = "2025-07-01"
+    NUM_PLAYERS_TO_ANALYZE = 0 # Set to 0 to run for all players
+    START_DATE = "2025-05-01"
     END_DATE = "2025-07-31"
     calculate_betting_bank_metrics(NUM_PLAYERS_TO_ANALYZE, START_DATE, END_DATE)
 

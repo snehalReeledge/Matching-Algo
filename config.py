@@ -9,6 +9,7 @@ PLAYERS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:G9pW0Uty/players"
 BANK_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getUserBankTransactions"
 PLATFORM_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getTransactions"
 CHECKBOOK_PAYMENTS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getCheckbookPayments"
+UPDATE_BANK_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:VG8fVqug/banktransactions/{banktransactions_id}"
 
 # API Settings
 API_TIMEOUT = 30  # API timeout in seconds

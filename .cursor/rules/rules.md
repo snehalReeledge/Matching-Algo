@@ -130,6 +130,12 @@ The system returns structured data including:
 - **Bank Transactions**: `https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getUserBankTransactions`
 - **Platform Transactions**: `https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getTransactions`
 
+### Update Bank Transactions
+
+The `UPDATE_BANK_TRANSACTIONS_API_URL` is used to update specific columns of a bank transaction. For this algorithm, it updates:
+- `transaction_link`: The matched platform transaction ID.
+- `last_edited_by`: Always set to 35047, representing the AI user ID.
+
 ## 🧪 Testing
 
 The system includes built-in testing capabilities:

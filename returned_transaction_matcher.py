@@ -19,6 +19,7 @@ class MatchCriteria:
     date_match: bool
     keyword_match: bool
     user_match: bool
+    is_direct_match: bool
 
 
 @dataclass
@@ -114,9 +115,40 @@ class SimpleTransactionMatcher:
         matches = []
         matched_bank_transaction_ids = set()
         matched_platform_transaction_ids = set()
-        
-        # Match each returned platform transaction
+
+        # Create a quick lookup for bank transactions by ID
+        bank_transactions_by_id = {bt['id']: bt for bt in self.bank_transactions}
+
+        # --- Step 1: Process direct matches from 'related_bank_transaction' ---
         for pt in self._returned_platform_transactions:
+            related_bt_info = pt.get('related_bank_transaction')
+            if related_bt_info and isinstance(related_bt_info, list) and len(related_bt_info) > 0:
+                related_bt_id = related_bt_info[0].get('id')
+                
+                bank_transaction = bank_transactions_by_id.get(related_bt_id)
+                
+                if bank_transaction:
+                    match_criteria = MatchCriteria(
+                        amount_match=True, date_match=True, keyword_match=False,
+                        user_match=True, is_direct_match=True
+                    )
+                    
+                    match = Match(
+                        platform_transaction=pt,
+                        bank_transaction=bank_transaction,
+                        match_date=datetime.now().isoformat(),
+                        match_criteria=match_criteria
+                    )
+                    
+                    matches.append(match)
+                    matched_platform_transaction_ids.add(pt.get('id'))
+                    matched_bank_transaction_ids.add(bank_transaction.get('id'))
+        
+        # --- Step 2: Process remaining transactions with standard logic ---
+        for pt in self._returned_platform_transactions:
+            if pt.get('id') in matched_platform_transaction_ids:
+                continue
+
             platform_amount = float(pt.get('Amount', 0))
             platform_date = datetime.fromisoformat(pt.get('Date', '').replace('Z', '+00:00'))
             
@@ -143,7 +175,8 @@ class SimpleTransactionMatcher:
                             amount_match=True,
                             date_match=True,
                             keyword_match=True,
-                            user_match=True
+                            user_match=True,
+                            is_direct_match=False
                         )
                     )
                     

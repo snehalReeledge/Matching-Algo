@@ -103,6 +103,12 @@ The **Received Transaction Matching Algorithm** matches platform transactions wh
 ### Overview
 The **Returned Transaction Matching Algorithm** matches platform transactions where funds are being returned FROM the platform (Transaction_Type == 'returned') with corresponding bank transactions based on keywords.
 
+### Update Bank Transactions
+
+The `UPDATE_BANK_TRANSACTIONS_API_URL` is used to update specific columns of a bank transaction. For this algorithm, it updates:
+- `transaction_link`: The matched platform transaction ID.
+- `last_edited_by`: Always set to 35047, representing the AI user ID.
+
 ### Core Algorithm Flow
 
 #### 2.1 Platform Transaction Filtering
@@ -125,6 +131,7 @@ The **Returned Transaction Matching Algorithm** matches platform transactions wh
 3. **Keyword Match**: Bank transaction must contain one of the specified keywords
 4. **User Match**: Transactions must belong to the same player
 5. **Bank Account Match**: Platform transaction's `from_account.bankaccount_id` must match bank transaction's `bankaccount_id`
+6. **Existing Link**: If a linked transaction is already present, the match is kept as it is.
 
 #### 2.4 Example Match
 
