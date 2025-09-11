@@ -5,6 +5,9 @@ import time
 import argparse
 from datetime import datetime, timedelta
 
+from update_bank_transaction import update_bank_transaction
+from update_platform_transaction import update_platform_transaction_date
+
 # Import from existing modules
 from config import (
     PLATFORM_TRANSACTIONS_API_URL,
@@ -42,6 +45,7 @@ def investigate_unmatched_received(player_id, matcher, match_results):
     unmatched_betting_pts = [
         pt for pt in match_results.unmatched_platform_transactions
         if 'betting bank account' in pt.get('to', {}).get('Account_Type', '').lower()
+        and not pt.get('related_bank_transaction') # Exclude PTs that already have a bank link
     ]
 
     for unmatched_pt in unmatched_betting_pts:
@@ -132,7 +136,7 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     print("="*60)
 
     # 2. Run Analysis
-    print("\n[Step 1/3] Running transaction matching analysis...")
+    print("\n[Step 1/5] Running transaction matching analysis...")
     received_matcher, returned_matcher, platform_transactions, received_results, returned_results = analyze_player_transactions(player_id, start_date_str, end_date_str, date_ranges)
     if not received_matcher:
         return
@@ -144,7 +148,7 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
         json.dump(platform_transactions, f, indent=4)
 
     # 3. Run Investigation
-    print("\n[Step 2/3] Investigating unmatched betting bank transactions...")
+    print("\n[Step 2/5] Investigating unmatched betting bank transactions...")
     unmatched_reasons = investigate_unmatched_received(player_id, received_matcher, received_results)
     # (Could add returned investigation here if needed)
     
@@ -154,7 +158,7 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     print(f" -> Investigation complete. Found {len(unmatched_reasons)} unmatched. Results saved.")
 
     # 4. Calculate Metrics
-    print("\n[Step 3/3] Calculating betting bank matching percentages...")
+    print("\n[Step 3/5] Calculating betting bank matching percentages...")
     metrics = calculate_metrics(received_matcher, returned_matcher, platform_transactions, received_results, returned_results)
     
     output_metrics_file = os.path.join(output_dir, "matching_summary.txt")
@@ -164,8 +168,43 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
         f.write(f"Returned: {metrics['returned']['matched']}/{metrics['returned']['total']} ({metrics['returned']['rate']})\n")
     print(" -> Metrics calculation complete. Results saved.")
     
-    # 5. Save Matched Pairs
-    print("\n[Step 4/4] Saving all matched transaction pairs...")
+    # 5. Update Bank Transaction Links
+    print("\n[Step 4/5] Updating bank transaction links for matched items...")
+    updated_count = 0
+    for match in received_results.matches:
+        bank_transaction_id = match.bank_transaction.get('transaction_id') # Changed from 'id'
+        platform_id = match.platform_transaction.get('id')
+        if bank_transaction_id and platform_id:
+            update_bank_transaction(bank_transaction_id, platform_id)
+            updated_count += 1
+            
+    for match in returned_results.matches:
+        bank_transaction_id = match.bank_transaction.get('transaction_id') # Changed from 'id'
+        platform_id = match.platform_transaction.get('id')
+        if bank_transaction_id and platform_id:
+            update_bank_transaction(bank_transaction_id, platform_id)
+            updated_count += 1
+    print(f" -> Update requests sent for {updated_count} matched transactions.")
+
+    # 6. Update Platform Transaction Dates
+    print("\n[Step 5/6] Syncing dates for matched transactions with different dates...")
+    dates_synced_count = 0
+    all_matches = received_results.matches + returned_results.matches
+    for match in all_matches:
+        platform_date_str = match.platform_transaction.get('Date', '').split('T')[0]
+        bank_date_str = match.bank_transaction.get('date', '').split('T')[0]
+
+        if platform_date_str and bank_date_str and platform_date_str != bank_date_str:
+            platform_id = match.platform_transaction.get('id')
+            bank_date = match.bank_transaction.get('date')
+            if platform_id and bank_date:
+                update_platform_transaction_date(platform_id, bank_date)
+                dates_synced_count += 1
+    print(f" -> Date sync requests sent for {dates_synced_count} transactions.")
+
+
+    # 7. Save Matched Pairs
+    print("\n[Step 6/6] Saving all matched transaction pairs...")
 
     def format_matches(matches, match_type):
         formatted = []
@@ -201,15 +240,9 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run a deep-dive debugging analysis for a single player.")
-    parser.add_argument("player_id", type=int, help="The ID of the player to analyze.")
-    
-    # Calculate tomorrow's date for the default end_date
-    tomorrow = datetime.now() + timedelta(days=1)
-    tomorrow_str = tomorrow.strftime('%Y-%m-%d')
-
-    parser.add_argument("--start_date", default="2025-01-01", help="Start date in YYYY-MM-DD format.")
-    parser.add_argument("--end_date", default=tomorrow_str, help="End date in YYYY-MM-DD format.")
-    args = parser.parse_args()
-
-    run_single_player_debug(args.player_id, args.start_date, args.end_date)
+    # This script is now configured to run as a specific test for player 309
+    # between the dates of 2025-07-01 and 2025-07-31.
+    player_id_to_run = 3123
+    start_date_to_run = None
+    end_date_to_run = None
+    run_single_player_debug(player_id_to_run, start_date_to_run, end_date_to_run)

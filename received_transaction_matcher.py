@@ -114,7 +114,7 @@ class SimpleReceivedTransactionMatcher:
         """Filters bank transactions to find potential received funds (negative amounts)."""
         return [
             bt for bt in self.bank_transactions
-            if bt.get('amount', 0) < 0  # Negative amounts for received funds
+            if bt.get('amount', 0) < 0 and not bt.get('transaction_link')
         ]
 
     def _preprocess_data(self):
@@ -310,6 +310,10 @@ class SimpleReceivedTransactionMatcher:
                 bank_transaction = bank_transactions_by_id.get(related_bt_id)
                 
                 if bank_transaction:
+                    # If the bank transaction is already linked, skip it to preserve the existing match.
+                    if bank_transaction.get('transaction_link'):
+                        continue
+
                     # Create a direct match, bypassing all other logic
                     match_criteria = MatchCriteria(
                         amount_match=True, date_match=True, checkbook_payment_exists=False,
@@ -361,6 +365,7 @@ class SimpleReceivedTransactionMatcher:
                 # All criteria must match
                 if amount_match and date_match and bank_account_match and checkbook_payment_exists:
                     # Check if checkbook payment is already matched
+                    # Note: We've already filtered out linked bank transactions, so no need to check bt again.
                     if checkbook_payment.get('id') in matched_checkbook_payment_ids:
                         continue
                     

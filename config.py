@@ -9,7 +9,8 @@ PLAYERS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:G9pW0Uty/players"
 BANK_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getUserBankTransactions"
 PLATFORM_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getTransactions"
 CHECKBOOK_PAYMENTS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getCheckbookPayments"
-UPDATE_BANK_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:VG8fVqug/banktransactions/{banktransactions_id}"
+UPDATE_BANK_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/updateBankTransaction/{transaction_id}"
+UPDATE_PLATFORM_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/transactions/{platform_transaction_id}"
 
 # API Settings
 API_TIMEOUT = 30  # API timeout in seconds
@@ -19,3 +20,4 @@ RETURNED_KEYWORDS = ["checkbook", "reel ventures", "rv enhanced wall", "individu
 
 # Logging Configuration
 LOG_LEVEL = "WARNING"  # Changed from INFO to WARNING for performance
+

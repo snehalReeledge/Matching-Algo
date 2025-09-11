@@ -81,6 +81,10 @@ class SimpleTransactionMatcher:
         # Filter potential bank transactions (positive amounts and containing keywords)
         self._potential_bank_transactions = []
         for bt in self.bank_transactions:
+            # If the bank transaction is already linked, skip it to preserve the existing match.
+            if bt.get('transaction_link'):
+                continue
+
             if bt.get('amount', 0) > 0:  # Only positive amounts
                 # Check if transaction name contains any of the keywords
                 transaction_name = bt.get('name', '').lower()
@@ -128,6 +132,10 @@ class SimpleTransactionMatcher:
                 bank_transaction = bank_transactions_by_id.get(related_bt_id)
                 
                 if bank_transaction:
+                    # If the bank transaction is already linked, skip it to preserve the existing match.
+                    if bank_transaction.get('transaction_link'):
+                        continue
+                        
                     match_criteria = MatchCriteria(
                         amount_match=True, date_match=True, keyword_match=False,
                         user_match=True, is_direct_match=True
@@ -166,6 +174,7 @@ class SimpleTransactionMatcher:
                 bank_account_match = self._is_bank_account_match(pt, bt)
                 
                 # All criteria must match
+                # Note: We've already filtered out linked bank transactions, so no need to check bt again.
                 if amount_match and date_match and bank_account_match:
                     match = Match(
                         platform_transaction=pt,
