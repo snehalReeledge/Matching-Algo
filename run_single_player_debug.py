@@ -4,6 +4,7 @@ import os
 import time
 import argparse
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 from update_bank_transaction import update_bank_transaction
 from update_platform_transaction import update_platform_transaction_date
@@ -12,10 +13,25 @@ from update_platform_transaction import update_platform_transaction_date
 from config import (
     PLATFORM_TRANSACTIONS_API_URL,
     BANK_TRANSACTIONS_API_URL,
-    RETURNED_KEYWORDS
+    RETURNED_KEYWORDS,
+    PLAYERS_API_URL
 )
 from received_transaction_matcher import SimpleReceivedTransactionMatcher
 from returned_transaction_matcher import SimpleTransactionMatcher as ReturnedTransactionMatcher
+
+def fetch_pro_players():
+    """Fetches all 'Pre-offboarded' players, excluding internal accounts."""
+    print("Fetching 'Pre-offboarded' players (excluding @reeledge.com)...")
+    try:
+        response = requests.get(PLAYERS_API_URL, timeout=60)
+        response.raise_for_status()
+        pro_players = [p for p in response.json() if p.get('player_stage') == 'Pre-offboarded']
+        filtered_players = [p for p in pro_players if '@reeledge.com' not in p.get('email', '').lower()]
+        print(f"Found {len(filtered_players)} 'Pre-offboarded' players to analyze.")
+        return filtered_players
+    except requests.exceptions.RequestException as e:
+        print(f"Fatal: Could not fetch players. {e}")
+        return []
 
 def analyze_player_transactions(player_id, start_date_str, end_date_str, date_ranges):
     """Runs the main matching logic for a single player and returns the matcher instances."""
@@ -23,6 +39,9 @@ def analyze_player_transactions(player_id, start_date_str, end_date_str, date_ra
         pt_response = requests.get(PLATFORM_TRANSACTIONS_API_URL, params={'user_id': player_id, 'start_date': start_date_str, 'end_date': end_date_str}, timeout=120)
         pt_response.raise_for_status()
         platform_transactions = pt_response.json()
+
+        # Sort platform transactions by date in ascending order
+        platform_transactions.sort(key=lambda x: x.get('Date', ''))
 
         bank_response = requests.get(BANK_TRANSACTIONS_API_URL, params={'player_id': player_id, 'start_date': date_ranges['bank_start'], 'end_date': date_ranges['bank_end']}, timeout=60)
         bank_response.raise_for_status()
@@ -240,9 +259,32 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
 
 
 if __name__ == "__main__":
-    # This script is now configured to run as a specific test for player 309
-    # between the dates of 2025-07-01 and 2025-07-31.
-    player_id_to_run = 3123
+    pro_players = fetch_pro_players()
+    
+    # This script can be configured to run in batches.
+    # We have already run the first 20 players in previous steps.
+    # To run the next batch, change the start and end indices.
+    # Example: players_to_run = pro_players[20:30] for the third batch.
+    
+    players_to_run = pro_players # Run for all players in the filtered list
+    
     start_date_to_run = None
     end_date_to_run = None
-    run_single_player_debug(player_id_to_run, start_date_to_run, end_date_to_run)
+
+    total_players = len(players_to_run)
+    print(f"Starting analysis for {total_players} players...")
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = []
+        for player in players_to_run:
+            player_id_to_run = player.get('id')
+            if player_id_to_run:
+                futures.append(executor.submit(run_single_player_debug, player_id_to_run, start_date_to_run, end_date_to_run))
+        
+        for i, future in enumerate(futures):
+            future.result() # Wait for the task to complete
+            print(f"--- Completed processing player {i+1}/{total_players} ---")
+    # player_id_to_run = 32272
+    # start_date_to_run = None
+    # end_date_to_run = None
+    # run_single_player_debug(player_id_to_run, start_date_to_run, end_date_to_run)

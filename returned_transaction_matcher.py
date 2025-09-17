@@ -7,6 +7,7 @@ Contains the core logic for matching returned platform transactions with bank tr
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
 from dataclasses import dataclass
+from collections import defaultdict
 
 # Returned transaction keywords
 RETURNED_KEYWORDS = ["checkbook", "reel ventures", "rv enhanced wall", "individual"]
@@ -127,12 +128,16 @@ class SimpleTransactionMatcher:
         for pt in self._returned_platform_transactions:
             related_bt_info = pt.get('related_bank_transaction')
             if related_bt_info and isinstance(related_bt_info, list) and len(related_bt_info) > 0:
+                # This transaction has a pre-existing link. Mark it as processed
+                # to prevent it from being re-matched in the next step.
+                matched_platform_transaction_ids.add(pt.get('id'))
+
                 related_bt_id = related_bt_info[0].get('id')
                 
                 bank_transaction = bank_transactions_by_id.get(related_bt_id)
                 
                 if bank_transaction:
-                    # If the bank transaction is already linked, skip it to preserve the existing match.
+                    # If the bank transaction is already linked, skip creating a new match.
                     if bank_transaction.get('transaction_link'):
                         continue
                         
@@ -149,7 +154,6 @@ class SimpleTransactionMatcher:
                     )
                     
                     matches.append(match)
-                    matched_platform_transaction_ids.add(pt.get('id'))
                     matched_bank_transaction_ids.add(bank_transaction.get('id'))
         
         # --- Step 2: Process remaining transactions with standard logic ---
@@ -194,6 +198,23 @@ class SimpleTransactionMatcher:
                     matched_platform_transaction_ids.add(pt.get('id'))
                     break  # Found a match for this platform transaction
         
+        # --- Step 3: Second pass to resolve duplicates among unmatched transactions ---
+        unmatched_pts = [
+            pt for pt in self._returned_platform_transactions 
+            if pt.get('id') not in matched_platform_transaction_ids
+        ]
+        unmatched_bts = [
+            bt for bt in self._potential_bank_transactions 
+            if bt.get('id') not in matched_bank_transaction_ids
+        ]
+
+        if unmatched_pts and unmatched_bts:
+            new_matches, used_pt_ids, used_bt_ids = self._resolve_unmatched_duplicates(unmatched_pts, unmatched_bts)
+            if new_matches:
+                matches.extend(new_matches)
+                matched_platform_transaction_ids.update(used_pt_ids)
+                matched_bank_transaction_ids.update(used_bt_ids)
+
         # Calculate summary statistics
         total_returned = len(self._returned_platform_transactions)
         total_potential = len(self._potential_bank_transactions)
@@ -225,6 +246,76 @@ class SimpleTransactionMatcher:
             summary=summary
         )
 
+    def _resolve_unmatched_duplicates(self, unmatched_platform_transactions, unmatched_bank_transactions):
+        """Second pass to find matches for platform transactions that are duplicates."""
+        
+        grouped_pts = defaultdict(list)
+        for pt in unmatched_platform_transactions:
+            date_str = pt.get('Date', '').split('T')[0]
+            amount = pt.get('Amount')
+            from_account = pt.get('from', {}).get('bankaccount_id')
+            key = (date_str, amount, from_account)
+            grouped_pts[key].append(pt)
+
+        duplicate_groups = {k: v for k, v in grouped_pts.items() if len(v) > 1}
+        if not duplicate_groups:
+            return [], set(), set()
+
+        new_matches = []
+        newly_matched_pt_ids = set()
+        newly_matched_bt_ids = set()
+
+        # Get player ID from the first transaction for comparison
+        player_id = None
+        if self.platform_transactions:
+            player_id = self.platform_transactions[0].get('player_id')
+
+        available_bts = [bt for bt in unmatched_bank_transactions if bt.get('id') not in newly_matched_bt_ids]
+
+        for bt in available_bts:
+            bank_date = datetime.fromisoformat(bt.get('date', '').replace('Z', '+00:00'))
+
+            for key, duplicate_pts in duplicate_groups.items():
+                ref_pt = duplicate_pts[0]
+                if any(p.get('id') in newly_matched_pt_ids for p in duplicate_pts):
+                    continue
+
+                if self._is_amount_match(float(ref_pt.get('Amount', 0)), float(bt.get('amount', 0))) and \
+                   self._is_date_match(datetime.fromisoformat(ref_pt.get('Date', '').replace('Z', '+00:00')), bank_date) and \
+                   self._is_bank_account_match(ref_pt, bt):
+                    
+                    candidate_pt = None
+                    if player_id:
+                        player_added_pts = [p for p in duplicate_pts if p.get('Added_By') == player_id]
+                        if player_added_pts:
+                            candidate_pt = player_added_pts[0]
+                    
+                    if not candidate_pt:
+                        candidate_pt = min(duplicate_pts, key=lambda p: abs(datetime.fromisoformat(p.get('Date', '').replace('Z', '+00:00')) - bank_date))
+
+                    if not candidate_pt:
+                        continue
+                        
+                    match_criteria = MatchCriteria(
+                        amount_match=True, date_match=True, keyword_match=True,
+                        user_match=True, is_direct_match=False
+                    )
+                    match = Match(
+                        platform_transaction=candidate_pt,
+                        bank_transaction=bt,
+                        match_date=datetime.now().isoformat(),
+                        match_criteria=match_criteria
+                    )
+                    new_matches.append(match)
+                    
+                    for pt in duplicate_pts:
+                        newly_matched_pt_ids.add(pt.get('id'))
+                    
+                    newly_matched_bt_ids.add(bt.get('id'))
+                    break
+        
+        return new_matches, newly_matched_pt_ids, newly_matched_bt_ids
+
 
 # Test function
 def test_simple_matching():
@@ -245,7 +336,10 @@ def test_simple_matching():
             "Account_Name": "Checkbook Custodial",
             "Account_Type": "Backer bank account",
             "bankaccount_id": 1313
-        }
+        },
+        "Notes": "",
+        "Comments": "Sample comment",
+        "Status": "Completed"
     }
     
     # Sample bank transaction (potential match)

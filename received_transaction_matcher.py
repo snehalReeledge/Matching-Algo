@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 import requests
 from config import CHECKBOOK_PAYMENTS_API_URL
+from collections import defaultdict
 
 # API Configuration for checkbook payments
 # CHECKBOOK_PAYMENTS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getCheckbookPayments"
@@ -304,13 +305,17 @@ class SimpleReceivedTransactionMatcher:
         for pt in self._received_platform_transactions:
             related_bt_info = pt.get('related_bank_transaction')
             if related_bt_info and isinstance(related_bt_info, list) and len(related_bt_info) > 0:
+                # This transaction has a pre-existing link. Mark it as processed
+                # to prevent it from being re-matched in the next step.
+                matched_platform_transaction_ids.add(pt.get('id'))
+
                 related_bt_id = related_bt_info[0].get('id')
                 
                 # Find the bank transaction in our fetched list
                 bank_transaction = bank_transactions_by_id.get(related_bt_id)
                 
                 if bank_transaction:
-                    # If the bank transaction is already linked, skip it to preserve the existing match.
+                    # If the bank transaction is already linked, skip creating a new match.
                     if bank_transaction.get('transaction_link'):
                         continue
 
@@ -331,7 +336,6 @@ class SimpleReceivedTransactionMatcher:
                     
                     matches.append(match)
                     # Add to matched sets to exclude from next step
-                    matched_platform_transaction_ids.add(pt.get('id'))
                     matched_bank_transaction_ids.add(bank_transaction.get('id'))
         
         # --- Step 2: Process remaining transactions with standard logic ---
@@ -425,6 +429,25 @@ class SimpleReceivedTransactionMatcher:
                 matched_platform_transaction_ids.add(pt.get('id')) # Ensure this is always added
                 self.used_checkbook_payment_ids[checkbook_payment.get('id')] = pt.get('id')
         
+        # --- Step 3: Second pass to resolve duplicates among unmatched transactions ---
+        unmatched_pts = [
+            pt for pt in self._received_platform_transactions 
+            if pt.get('id') not in matched_platform_transaction_ids
+        ]
+        unmatched_bts = [
+            bt for bt in self._potential_bank_transactions 
+            if bt.get('id') not in matched_bank_transaction_ids
+        ]
+
+        if unmatched_pts and unmatched_bts:
+            new_matches, used_pt_ids, used_bt_ids, used_cp_ids_map = self._resolve_unmatched_duplicates(unmatched_pts, unmatched_bts)
+            if new_matches:
+                matches.extend(new_matches)
+                matched_platform_transaction_ids.update(used_pt_ids)
+                matched_bank_transaction_ids.update(used_bt_ids)
+                for cp_id, pt_id in used_cp_ids_map.items():
+                    self.used_checkbook_payment_ids[cp_id] = pt_id
+
         # Calculate summary statistics
         total_received = len(self._received_platform_transactions)
         total_potential = len(self._potential_bank_transactions)
@@ -464,6 +487,76 @@ class SimpleReceivedTransactionMatcher:
             summary=summary
         )
 
+    def _resolve_unmatched_duplicates(self, unmatched_platform_transactions, unmatched_bank_transactions):
+        """Second pass to find matches for platform transactions that are duplicates."""
+        
+        grouped_pts = defaultdict(list)
+        for pt in unmatched_platform_transactions:
+            date_str = pt.get('Date', '').split('T')[0]
+            amount = pt.get('Amount')
+            to_account = pt.get('to', {}).get('bankaccount_id')
+            key = (date_str, amount, to_account)
+            grouped_pts[key].append(pt)
+
+        duplicate_groups = {k: v for k, v in grouped_pts.items() if len(v) > 1}
+        if not duplicate_groups:
+            return [], set(), set(), {}
+
+        new_matches = []
+        newly_matched_pt_ids = set()
+        newly_matched_bt_ids = set()
+        newly_matched_cp_ids_map = {}
+
+        available_bts = [bt for bt in unmatched_bank_transactions if bt.get('id') not in newly_matched_bt_ids]
+
+        for bt in available_bts:
+            bank_date = datetime.fromisoformat(bt.get('date', '').replace('Z', '+00:00'))
+
+            for key, duplicate_pts in duplicate_groups.items():
+                ref_pt = duplicate_pts[0]
+                if any(p.get('id') in newly_matched_pt_ids for p in duplicate_pts):
+                    continue
+
+                if self._is_amount_match(float(ref_pt.get('Amount', 0)), float(bt.get('amount', 0))) and \
+                   self._is_date_match(datetime.fromisoformat(ref_pt.get('Date', '').replace('Z', '+00:00')), bank_date) and \
+                   self._is_bank_account_match(ref_pt, bt):
+                    
+                    candidate_pt = None
+                    player_added_pts = [p for p in duplicate_pts if p.get('Added_By') == self.user_id]
+                    
+                    if player_added_pts:
+                        candidate_pt = player_added_pts[0]
+                    else:
+                        candidate_pt = min(duplicate_pts, key=lambda p: abs(datetime.fromisoformat(p.get('Date', '').replace('Z', '+00:00')) - bank_date))
+
+                    if not candidate_pt:
+                        continue
+                        
+                    checkbook_payment = self._find_matching_checkbook_payment(bt, candidate_pt)
+                    if checkbook_payment and checkbook_payment.get('id') not in self.used_checkbook_payment_ids and checkbook_payment.get('id') not in newly_matched_cp_ids_map:
+                        match_criteria = MatchCriteria(
+                            amount_match=True, date_match=True, checkbook_payment_exists=True,
+                            recipient_match=True, direction_match=True, description_match=True,
+                            user_match=True, is_direct_match=False
+                        )
+                        match = Match(
+                            platform_transaction=candidate_pt,
+                            bank_transaction=bt,
+                            checkbook_payment=checkbook_payment,
+                            match_date=datetime.now().isoformat(),
+                            match_criteria=match_criteria
+                        )
+                        new_matches.append(match)
+                        
+                        for pt in duplicate_pts:
+                            newly_matched_pt_ids.add(pt.get('id'))
+                        
+                        newly_matched_bt_ids.add(bt.get('id'))
+                        newly_matched_cp_ids_map[checkbook_payment.get('id')] = candidate_pt.get('id')
+                        break 
+        
+        return new_matches, newly_matched_pt_ids, newly_matched_bt_ids, newly_matched_cp_ids_map
+
 
 # Test function for received transactions with checkbook validation
 def test_received_matching():
@@ -485,7 +578,10 @@ def test_received_matching():
             "Account_Name": "Player 15121 Account",
             "Account_Type": "Player bank account",
             "bankaccount_id": 18668
-        }
+        },
+        "Notes": "",
+        "Comments": "Sample comment",
+        "Status": "Completed"
     }
     
     # Sample bank transaction (negative amount for received funds)
