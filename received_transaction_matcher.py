@@ -150,7 +150,7 @@ class SimpleReceivedTransactionMatcher:
         
         # Check description validation: either contains "fund" (case-insensitive) OR starts with "F" (case-insensitive)
         description = checkbook_payment.get('description', '').lower()
-        if not ('fund' in description or description.startswith('f')):
+        if not ('fund' in description or description.startswith('f') or 'initial deposit fee' in description):
             return False
         
         return True
@@ -183,7 +183,7 @@ class SimpleReceivedTransactionMatcher:
             if abs(bank_amount - checkbook_amount) <= 0.01:
                 # Check description validation: either contains "fund" (case-insensitive) OR starts with "F"
                 description = cp.get('description', '').lower()
-                if 'fund' in description or description.startswith('f'):
+                if 'fund' in description or description.startswith('f') or 'initial deposit fee' in description:
                     # Check date match: bank transaction date vs checkbook payment date (±2 days)
                     # This validates that the checkbook payment corresponds to the specific bank transaction
                     try:
@@ -192,8 +192,8 @@ class SimpleReceivedTransactionMatcher:
                             checkbook_date = datetime.fromtimestamp(checkbook_timestamp / 1000)
                             # Use bank date for comparison (as requested: bank transaction vs checkbook payment)
                             date_diff = abs((bank_date - checkbook_date).total_seconds())
-                            # Allow ±3 days tolerance (259,200 seconds = 3 days) - UPDATED
-                            if date_diff <= 259200:
+                            # Allow ±9 days tolerance (777,600 seconds = 9 days) - UPDATED
+                            if date_diff <= 777600:
                                 matching_payments.append(cp)
                     except (ValueError, TypeError):
                         # If date parsing fails, skip this payment
@@ -272,9 +272,9 @@ class SimpleReceivedTransactionMatcher:
         return abs(abs(platform_amount) - abs(bank_amount)) <= 0.01
 
     def _is_date_match(self, platform_date: datetime, bank_date: datetime) -> bool:
-        """Check if dates are within 5 days of each other (core matching tolerance)"""
+        """Check if dates are within 9 days of each other (core matching tolerance)"""
         date_diff = abs(platform_date - bank_date)
-        return date_diff <= timedelta(days=5)
+        return date_diff <= timedelta(days=9)
 
     def _is_bank_account_match(self, platform_transaction: Dict[str, Any], 
                               bank_transaction: Dict[str, Any]) -> bool:

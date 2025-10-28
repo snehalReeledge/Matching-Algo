@@ -79,6 +79,14 @@ class SimpleTransactionMatcher:
             if pt.get('Transaction_Type') == 'returned'
         ]
         
+        # If a player ID is available, the *only* keyword we'll use is 'D<player_id>'.
+        # Otherwise, we'll fall back to the general returned keywords.
+        keywords = self.returned_keywords
+        if self._returned_platform_transactions:
+            player_id = self._returned_platform_transactions[0].get('User_ID')
+            if player_id:
+                keywords = [f"D{player_id}"]
+
         # Filter potential bank transactions (positive amounts and containing keywords)
         self._potential_bank_transactions = []
         for bt in self.bank_transactions:
@@ -89,7 +97,7 @@ class SimpleTransactionMatcher:
             if bt.get('amount', 0) > 0:  # Only positive amounts
                 # Check if transaction name contains any of the keywords
                 transaction_name = bt.get('name', '').lower()
-                if any(keyword.lower() in transaction_name for keyword in self.returned_keywords):
+                if any(keyword.lower() in transaction_name for keyword in keywords):
                     self._potential_bank_transactions.append(bt)
     
     def _is_amount_match(self, platform_amount: float, bank_amount: float) -> bool:
@@ -97,9 +105,9 @@ class SimpleTransactionMatcher:
         return abs(platform_amount - bank_amount) <= 0.01
     
     def _is_date_match(self, platform_date: datetime, bank_date: datetime) -> bool:
-        """Check if dates are within 5 days of each other"""
+        """Check if dates are within 9 days of each other"""
         date_diff = abs(platform_date - bank_date)
-        return date_diff <= timedelta(days=5)
+        return date_diff <= timedelta(days=9)
     
     def _is_bank_account_match(self, platform_transaction: Dict[str, Any], 
                               bank_transaction: Dict[str, Any]) -> bool:

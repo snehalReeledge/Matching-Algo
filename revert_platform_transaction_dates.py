@@ -1,7 +1,7 @@
 import os
 import json
 from concurrent.futures import ThreadPoolExecutor
-from update_platform_transaction import update_platform_transaction_date
+from update_platform_transaction import update_platform_transaction
 
 # This is the list of platform transaction IDs that had their dates modified
 # in the previous run, based on the logs.
@@ -95,7 +95,9 @@ def revert_single_transaction(transaction_id, transaction_map):
         return
         
     print(f"Reverting date for transaction {transaction_id} to {original_date}...")
-    update_platform_transaction_date(transaction_id, original_date)
+    # The date from the dump might have timezone info, so we format it
+    formatted_date = original_date.split('T')[0]
+    update_platform_transaction(transaction_id, {"Date": formatted_date})
 
 def main():
     """

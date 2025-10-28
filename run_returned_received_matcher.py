@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 from update_bank_transaction import update_bank_transaction
-from update_platform_transaction import update_platform_transaction_date
+from update_platform_transaction import update_platform_transaction
 
 # Import from existing modules
 from config import (
@@ -19,15 +19,18 @@ from config import (
 from received_transaction_matcher import SimpleReceivedTransactionMatcher
 from returned_transaction_matcher import SimpleTransactionMatcher as ReturnedTransactionMatcher
 
-def fetch_pro_players():
-    """Fetches all 'Pre-offboarded' players, excluding internal accounts."""
-    print("Fetching 'Pre-offboarded' players (excluding @reeledge.com)...")
+def fetch_players_by_stage(stage):
+    """Fetches all players for a given stage, excluding internal accounts."""
+    print(f"Fetching '{stage}' players (excluding @reeledge.com)...")
     try:
         response = requests.get(PLAYERS_API_URL, timeout=60)
         response.raise_for_status()
-        pro_players = [p for p in response.json() if p.get('player_stage') == 'Pre-offboarded']
-        filtered_players = [p for p in pro_players if '@reeledge.com' not in p.get('email', '').lower()]
-        print(f"Found {len(filtered_players)} 'Pre-offboarded' players to analyze.")
+        
+        all_players = response.json()
+        stage_players = [p for p in all_players if p.get('player_stage') == stage]
+        filtered_players = [p for p in stage_players if '@reeledge.com' not in p.get('email', '').lower()]
+        
+        print(f"Found {len(filtered_players)} '{stage}' players to analyze.")
         return filtered_players
     except requests.exceptions.RequestException as e:
         print(f"Fatal: Could not fetch players. {e}")
@@ -43,9 +46,16 @@ def analyze_player_transactions(player_id, start_date_str, end_date_str, date_ra
         # Sort platform transactions by date in ascending order
         platform_transactions.sort(key=lambda x: x.get('Date', ''))
 
-        bank_response = requests.get(BANK_TRANSACTIONS_API_URL, params={'player_id': player_id, 'start_date': date_ranges['bank_start'], 'end_date': date_ranges['bank_end']}, timeout=60)
+        bank_response = requests.get(
+            BANK_TRANSACTIONS_API_URL, 
+            params={'player_id': player_id, '_': int(time.time())}, 
+            timeout=60
+        )
         bank_response.raise_for_status()
         bank_transactions = bank_response.json().get('bankTransactions', [])
+
+        # Sort bank transactions by date in ascending order
+        bank_transactions.sort(key=lambda x: x.get('date', ''))
 
         received_matcher = SimpleReceivedTransactionMatcher(platform_transactions, bank_transactions, player_id, date_ranges['checkbook_start'], date_ranges['checkbook_end'])
         received_results = received_matcher.match_received_transactions()
@@ -125,9 +135,9 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     """Orchestrates the entire debugging workflow for a single player."""
     
     # 1. Setup
-    output_dir = f"debug/player_{player_id}_investigation"
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    # output_dir = f"debug_2025_10_03/player_{player_id}_investigation"
+    # if not os.path.exists(output_dir):
+    #     os.makedirs(output_dir)
     
     print("="*60)
     print(f"Starting Debugging for Player ID: {player_id}")
@@ -151,41 +161,55 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
             'checkbook_start': None, 'checkbook_end': None
         }
 
-    print(f"Output will be saved in: {output_dir}")
+    # print(f"Output will be saved in: {output_dir}")
     print("="*60)
 
     # 2. Run Analysis
     print("\n[Step 1/5] Running transaction matching analysis...")
     received_matcher, returned_matcher, platform_transactions, received_results, returned_results = analyze_player_transactions(player_id, start_date_str, end_date_str, date_ranges)
     if not received_matcher:
-        return
+        return 0, 0
     print(" -> Analysis complete.")
 
     # Dump the raw platform transactions for inspection
-    output_pt_dump_file = os.path.join(output_dir, "platform_transactions_dump.json")
-    with open(output_pt_dump_file, 'w') as f:
-        json.dump(platform_transactions, f, indent=4)
+    # output_pt_dump_file = os.path.join(output_dir, "platform_transactions_dump.json")
+    # with open(output_pt_dump_file, 'w') as f:
+    #     json.dump(platform_transactions, f, indent=4)
+        
+    # Dump the checkbook payments for inspection
+    # output_cp_dump_file = os.path.join(output_dir, "checkbook_payments_dump.json")
+    # with open(output_cp_dump_file, 'w') as f:
+    #     json.dump({
+    #         "all_checkbook_payments": received_matcher.checkbook_payments,
+    #         "valid_checkbook_payments_for_received": received_matcher._valid_checkbook_payments
+    #     }, f, indent=4)
+        
+    # Dump all fetched bank transactions for inspection
+    # all_bank_transactions = getattr(returned_matcher, 'bank_transactions', [])
+    # output_bt_dump_file = os.path.join(output_dir, "bank_transactions_dump.json")
+    # with open(output_bt_dump_file, 'w') as f:
+    #     json.dump(all_bank_transactions, f, indent=4)
 
     # 3. Run Investigation
     print("\n[Step 2/5] Investigating unmatched betting bank transactions...")
     unmatched_reasons = investigate_unmatched_received(player_id, received_matcher, received_results)
     # (Could add returned investigation here if needed)
     
-    output_investigation_file = os.path.join(output_dir, "unmatched_betting_bank_reasons.json")
-    with open(output_investigation_file, 'w') as f:
-        json.dump(unmatched_reasons, f, indent=4)
-    print(f" -> Investigation complete. Found {len(unmatched_reasons)} unmatched. Results saved.")
+    # output_investigation_file = os.path.join(output_dir, "unmatched_betting_bank_reasons.json")
+    # with open(output_investigation_file, 'w') as f:
+    #     json.dump(unmatched_reasons, f, indent=4)
+    print(f" -> Investigation complete. Found {len(unmatched_reasons)} unmatched.")
 
     # 4. Calculate Metrics
     print("\n[Step 3/5] Calculating betting bank matching percentages...")
     metrics = calculate_metrics(received_matcher, returned_matcher, platform_transactions, received_results, returned_results)
     
-    output_metrics_file = os.path.join(output_dir, "matching_summary.txt")
-    with open(output_metrics_file, 'w') as f:
-        f.write("--- Betting Bank Matching Metrics ---\n")
-        f.write(f"Received: {metrics['received']['matched']}/{metrics['received']['total']} ({metrics['received']['rate']})\n")
-        f.write(f"Returned: {metrics['returned']['matched']}/{metrics['returned']['total']} ({metrics['returned']['rate']})\n")
-    print(" -> Metrics calculation complete. Results saved.")
+    # output_metrics_file = os.path.join(output_dir, "matching_summary.txt")
+    # with open(output_metrics_file, 'w') as f:
+    #     f.write("--- Betting Bank Matching Metrics ---\n")
+    #     f.write(f"Received: {metrics['received']['matched']}/{metrics['received']['total']} ({metrics['received']['rate']})\n")
+    #     f.write(f"Returned: {metrics['returned']['matched']}/{metrics['returned']['total']} ({metrics['returned']['rate']})\n")
+    print(" -> Metrics calculation complete.")
     
     # 5. Update Bank Transaction Links
     print("\n[Step 4/5] Updating bank transaction links for matched items...")
@@ -217,7 +241,14 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
             platform_id = match.platform_transaction.get('id')
             bank_date = match.bank_transaction.get('date')
             if platform_id and bank_date:
-                update_platform_transaction_date(platform_id, bank_date)
+                formatted_date = bank_date.split('T')[0]
+                
+                # Prepare the note
+                old_notes = match.platform_transaction.get('Notes', '') or ''
+                note_to_add = f"System Matched: Date updated from {platform_date_str} to {bank_date_str} on {datetime.now().strftime('%Y-%m-%d')}."
+                new_notes = f"{old_notes}\n{note_to_add}".strip()
+                
+                update_platform_transaction(platform_id, {"Date": formatted_date, "Notes": new_notes})
                 dates_synced_count += 1
     print(f" -> Date sync requests sent for {dates_synced_count} transactions.")
 
@@ -247,44 +278,63 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
         "returned_matches": format_matches(returned_results.matches, 'returned')
     }
     
-    output_matches_file = os.path.join(output_dir, "matched_pairs.json")
-    with open(output_matches_file, 'w') as f:
-        json.dump(all_matches, f, indent=4)
-    print(f" -> Saved {len(received_results.matches)} received and {len(returned_results.matches)} returned matches.")
+    # output_matches_file = os.path.join(output_dir, "matched_pairs.json")
+    # with open(output_matches_file, 'w') as f:
+    #     json.dump(all_matches, f, indent=4)
+    print(f" -> Found {len(received_results.matches)} received and {len(returned_results.matches)} returned matches to link.")
     
     print("\n" + "="*60)
-    print("Debugging complete.")
-    print(f"See results in '{output_dir}'")
+    print("Analysis complete.")
+    # print(f"See results in '{output_dir}'")
     print("="*60)
+    
+    return updated_count, dates_synced_count
 
 
 if __name__ == "__main__":
-    pro_players = fetch_pro_players()
-    
-    # This script can be configured to run in batches.
-    # We have already run the first 20 players in previous steps.
-    # To run the next batch, change the start and end indices.
-    # Example: players_to_run = pro_players[20:30] for the third batch.
-    
-    players_to_run = pro_players # Run for all players in the filtered list
-    
-    start_date_to_run = None
-    end_date_to_run = None
+    parser = argparse.ArgumentParser(description="Run matching for players in one or more specific stages or for a single player.")
+    parser.add_argument("--player_id", type=str, default=None, help="A specific player ID to run for.")
+    parser.add_argument("player_stages", nargs='*', type=str, help="One or more player stages to process (e.g., 'Batch 1' 'Batch 2').")
+    parser.add_argument("--start_date", type=str, default=None, help="Start date in YYYY-MM-DD format.")
+    parser.add_argument("--end_date", type=str, default=None, help="End date in YYYY-MM-DD format.")
+    args = parser.parse_args()
 
-    total_players = len(players_to_run)
-    print(f"Starting analysis for {total_players} players...")
+    if not args.player_id and not args.player_stages:
+        parser.error("You must provide either --player_id or one or more player_stages.")
+    if args.player_id and args.player_stages:
+        parser.error("Please provide either --player_id or player_stages, not both.")
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = []
-        for player in players_to_run:
-            player_id_to_run = player.get('id')
-            if player_id_to_run:
-                futures.append(executor.submit(run_single_player_debug, player_id_to_run, start_date_to_run, end_date_to_run))
+    players_to_run = []
+    if args.player_id:
+        players_to_run = [{'id': args.player_id}]
+    else:
+        for stage in args.player_stages:
+            players_to_run.extend(fetch_players_by_stage(stage))
+    
+    start_date_to_run = args.start_date
+    end_date_to_run = args.end_date
+
+    if players_to_run:
+        total_players = len(players_to_run)
+        print(f"Starting analysis for {total_players} players...")
+
+        total_linked = 0
+        total_synced = 0
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = []
+            for player in players_to_run:
+                player_id_to_run = player.get('id')
+                if player_id_to_run:
+                    futures.append(executor.submit(run_single_player_debug, player_id_to_run, start_date_to_run, end_date_to_run))
+            
+            for i, future in enumerate(futures):
+                linked_count, synced_count = future.result() # Wait for the task to complete
+                total_linked += linked_count
+                total_synced += synced_count
+                print(f"--- Completed processing player {i+1}/{total_players} ---")
         
-        for i, future in enumerate(futures):
-            future.result() # Wait for the task to complete
-            print(f"--- Completed processing player {i+1}/{total_players} ---")
-    # player_id_to_run = 32272
-    # start_date_to_run = None
-    # end_date_to_run = None
-    # run_single_player_debug(player_id_to_run, start_date_to_run, end_date_to_run)
+        print("\n" + "="*60)
+        print("--- BATCH SUMMARY ---")
+        print(f"Total bank transactions linked: {total_linked}")
+        print(f"Total platform transaction dates synced: {total_synced}")
+        print("="*60)
