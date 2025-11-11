@@ -22,6 +22,7 @@ from simplified_paypal_matcher import (
     ThreeWayMatch
 )
 from config import (
+    PLAYERS_API_URL,
     UPDATE_BANK_TRANSACTIONS_API_URL,
     UPDATE_PLATFORM_TRANSACTIONS_API_URL,
     CREATE_PLATFORM_TRANSACTION_API_URL,
@@ -29,6 +30,34 @@ from config import (
     TRANSFER_ACCOUNT_ID,
     FEES_ACCOUNT_ID
 )
+
+# --- Helper Functions ---
+def get_player_ids_by_stage(stage: str) -> list[int]:
+    """Fetches all players and filters them to get a list of IDs for a given player stage."""
+    player_ids = []
+    print(f"Fetching players for stage: '{stage}'...")
+    try:
+        response = requests.get(PLAYERS_API_URL)
+        response.raise_for_status()
+        players = response.json()
+        
+        if not players:
+            print("No players found from the API.")
+            return []
+            
+        # Filter players by the specified stage
+        player_ids = [p['id'] for p in players if p.get('player_stage') == stage and p.get('id')]
+        
+        if not player_ids:
+            print(f"No players found for stage '{stage}'.")
+        else:
+            print(f"Found {len(player_ids)} players for stage '{stage}'.")
+            
+        return player_ids
+        
+    except requests.RequestException as e:
+        print(f"Error fetching players: {e}")
+        return []
 
 # --- Execution Functions ---
 
@@ -38,18 +67,21 @@ def execute_simple_matches(simple_matches: list[SimpleMatch], dry_run: bool = Fa
     """
     if not simple_matches:
         print("--- No Simple Matches to Execute ---")
-        return
+        return 0
 
     print(f"--- Executing {len(simple_matches)} Simple Matches ---")
+    link_count = 0
     for match in simple_matches:
         pt_id = match.platform_transaction.get('id')
         for bt in match.bank_transactions:
             bt_id = bt.get('id')
+            link_count += 1
             if dry_run:
                 print(f"  [DRY RUN] Would link PT {pt_id} <-> BT {bt_id}")
             else:
                 print(f"  Linking PT {pt_id} <-> BT {bt_id}")
                 link_bank_transaction(bt.get('transaction_id'), pt_id)
+    return link_count
 
 def execute_three_way_match(match: ThreeWayMatch, player_id: int, dry_run: bool = False):
     """
@@ -59,18 +91,21 @@ def execute_three_way_match(match: ThreeWayMatch, player_id: int, dry_run: bool 
     
     original_pt = match.original_platform_transaction
     to_account_id = original_pt.get('To_Account') # Original Betting Bank account ID
+    link_count = 0
 
     if dry_run:
         print(f"  [DRY RUN] Would update original PT {original_pt.get('id')} to gross amount ${match.gross_amount} and point to Transfer Account.")
         print(f"  [DRY RUN] Would create new 'fees' transaction for ${match.fee_amount}.")
         print(f"  [DRY RUN] Would create new 'transfer' transaction for ${match.net_amount} to original Betting Bank account.")
         if match.paypal_bank_transaction:
+            link_count += 1
             print(f"  [DRY RUN] Would link PayPal BT {match.paypal_bank_transaction.get('id')} to updated PT {original_pt.get('id')}.")
         if match.bank_side_transaction:
+            link_count += 1
             print(f"  [DRY RUN] Would link Bank-side BT {match.bank_side_transaction.get('id')} to the new transfer PT.")
         else:
             print(f"  [DRY RUN] Bank-side BT not found, would not be linked.")
-        return
+        return link_count
 
     # 1. Update the original transaction: Betting PayPal -> Transfer Account (Gross Amount)
     update_payload = {
@@ -116,11 +151,14 @@ def execute_three_way_match(match: ThreeWayMatch, player_id: int, dry_run: bool 
     # 4. Match the transactions
     print("  Linking bank transactions to new/updated platform transactions...")
     if match.paypal_bank_transaction:
+        link_count += 1
         link_bank_transaction(match.paypal_bank_transaction.get('transaction_id'), updated_pt.get('id'))
     if match.bank_side_transaction:
+        link_count += 1
         link_bank_transaction(match.bank_side_transaction.get('transaction_id'), transfer_pt.get('id'))
     
     print(f"  SUCCESS: Successfully executed three-way match for original PT {original_pt.get('id')}")
+    return link_count
 
 # --- Runner Logic ---
 
@@ -131,8 +169,8 @@ def run_matching_for_player(player_id: int, base_output_dir: str, delay_seconds:
 
     print(f"\nStarting simplified matching for player {player_id}")
     
-    output_dir = os.path.join(base_output_dir, f"player_{player_id}")
-    os.makedirs(output_dir, exist_ok=True)
+    # output_dir = os.path.join(base_output_dir, f"player_{player_id}")
+    # os.makedirs(output_dir, exist_ok=True)
     
     # 1. Fetch Data
     platform_transactions = get_all_platform_transactions(player_id)
@@ -140,14 +178,14 @@ def run_matching_for_player(player_id: int, base_output_dir: str, delay_seconds:
     scraped_transactions = get_scraped_transactions(player_id)
     
     # Save raw data for inspection
-    raw_data_dir = os.path.join(output_dir, "raw_data")
-    os.makedirs(raw_data_dir, exist_ok=True)
-    with open(os.path.join(raw_data_dir, "platform_transactions.json"), 'w') as f:
-        json.dump(platform_transactions, f, indent=2)
-    with open(os.path.join(raw_data_dir, "bank_transactions.json"), 'w') as f:
-        json.dump(bank_transactions, f, indent=2)
-    with open(os.path.join(raw_data_dir, "scraped_transactions.json"), 'w') as f:
-        json.dump(scraped_transactions, f, indent=2)
+    # raw_data_dir = os.path.join(output_dir, "raw_data")
+    # os.makedirs(raw_data_dir, exist_ok=True)
+    # with open(os.path.join(raw_data_dir, "platform_transactions.json"), 'w') as f:
+    #     json.dump(platform_transactions, f, indent=2)
+    # with open(os.path.join(raw_data_dir, "bank_transactions.json"), 'w') as f:
+    #     json.dump(bank_transactions, f, indent=2)
+    # with open(os.path.join(raw_data_dir, "scraped_transactions.json"), 'w') as f:
+    #     json.dump(scraped_transactions, f, indent=2)
 
     # 2. Run Matcher
     matcher = SimplifiedPayPalMatcher(platform_transactions, bank_transactions, scraped_transactions)
@@ -156,23 +194,25 @@ def run_matching_for_player(player_id: int, base_output_dir: str, delay_seconds:
     print(f"  Matching Results: {len(results.simple_matches)} simple, {len(results.three_way_matches)} three-way, {len(results.unmatched_platform_transactions)} unmatched.")
     
     # 3. Execute Matches
-    execute_simple_matches(results.simple_matches, dry_run)
+    simple_links = execute_simple_matches(results.simple_matches, dry_run)
+    three_way_links = 0
     for match in results.three_way_matches:
-        execute_three_way_match(match, player_id, dry_run)
+        three_way_links += execute_three_way_match(match, player_id, dry_run)
         
     # 4. Save Report
-    report_path = os.path.join(output_dir, "simplified_matching_report.json")
-    report_data = {
-        "player_id": player_id,
-        "run_timestamp": datetime.now().isoformat(),
-        "simple_matches": [m.__dict__ for m in results.simple_matches],
-        "three_way_matches": [m.__dict__ for m in results.three_way_matches],
-        "unmatched_transactions": [u.__dict__ for u in results.unmatched_platform_transactions]
-    }
-    with open(report_path, 'w') as f:
-        json.dump(report_data, f, indent=2, default=str)
+    # report_path = os.path.join(output_dir, "simplified_matching_report.json")
+    # report_data = {
+    #     "player_id": player_id,
+    #     "run_timestamp": datetime.now().isoformat(),
+    #     "simple_matches": [m.__dict__ for m in results.simple_matches],
+    #     "three_way_matches": [m.__dict__ for m in results.three_way_matches],
+    #     "unmatched_transactions": [u.__dict__ for u in results.unmatched_platform_transactions]
+    # }
+    # with open(report_path, 'w') as f:
+    #     json.dump(report_data, f, indent=2, default=str)
         
-    print(f"  Report saved to {report_path}")
+    # print(f"  Report saved to {report_path}")
+    return simple_links + three_way_links
 
 # --- API Interaction Functions ---
 
@@ -219,32 +259,51 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Run the simplified PayPal to Bank matcher.")
-    parser.add_argument("player_ids", nargs='+', type=int, help="One or more player IDs to process.")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--player-ids", nargs='+', type=int, help="One or more player IDs to process.")
+    group.add_argument("--player-stage", type=str, help="The player stage to process (e.g., 'Batch 1').")
     parser.add_argument("--dry-run", action="store_true", help="Run the matcher without executing any transactions (read-only).")
     parser.add_argument("--max-workers", type=int, default=5, help="Maximum number of concurrent players to process.")
     parser.add_argument("--delay", type=int, default=2, help="Delay in seconds between starting each player's task.")
     
     args = parser.parse_args()
 
-    player_ids_to_process = args.player_ids
+    player_ids_to_process = []
+    if args.player_stage:
+        player_ids_to_process = get_player_ids_by_stage(args.player_stage)
+    elif args.player_ids:
+        player_ids_to_process = args.player_ids
+    
+    if not player_ids_to_process:
+        print("No player IDs to process. Exiting.")
+        exit()
+
     MAX_WORKERS = args.max_workers
     DELAY_BETWEEN_TASKS = args.delay
 
     if args.dry_run:
         print("\n--- RUNNING IN DRY-RUN MODE: NO DATA WILL BE MODIFIED ---\n")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    batch_base_dir = f"batch_run_simplified_{timestamp}"
-    os.makedirs(batch_base_dir, exist_ok=True)
-    print(f"Batch output will be saved in: {batch_base_dir}")
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # batch_base_dir = f"batch_run_simplified_{timestamp}"
+    # os.makedirs(batch_base_dir, exist_ok=True)
+    # print(f"Batch output will be saved in: {batch_base_dir}")
+    batch_base_dir = "" # Set a dummy value as it's passed to the function
 
+    total_links = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [
             executor.submit(run_matching_for_player, pid, batch_base_dir, i * DELAY_BETWEEN_TASKS, args.dry_run)
             for i, pid in enumerate(player_ids_to_process)
         ]
         for i, future in enumerate(futures):
-            future.result()  # Wait for completion and handle exceptions
+            links_for_player = future.result()  # Wait for completion and handle exceptions
+            if links_for_player:
+                total_links += links_for_player
             print(f"--- Completed processing player {i + 1}/{len(player_ids_to_process)} ---")
 
     print("\n--- Batch processing complete. ---")
+    if args.dry_run:
+        print(f"\n--- Total links that would be made: {total_links} ---")
+    else:
+        print(f"\n--- Total links made: {total_links} ---")

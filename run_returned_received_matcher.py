@@ -135,7 +135,8 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     """Orchestrates the entire debugging workflow for a single player."""
     
     # 1. Setup
-    # output_dir = f"debug_2025_10_03/player_{player_id}_investigation"
+    timestamp = datetime.now().strftime("%Y_%m_%d")
+    # output_dir = f"@debug_transfers_{timestamp}/player_{player_id}"
     # if not os.path.exists(output_dir):
     #     os.makedirs(output_dir)
     
@@ -165,18 +166,18 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     print("="*60)
 
     # 2. Run Analysis
-    print("\n[Step 1/5] Running transaction matching analysis...")
+    print("\n[Step 1/7] Running transaction matching analysis...")
     received_matcher, returned_matcher, platform_transactions, received_results, returned_results = analyze_player_transactions(player_id, start_date_str, end_date_str, date_ranges)
     if not received_matcher:
         return 0, 0
     print(" -> Analysis complete.")
 
-    # Dump the raw platform transactions for inspection
+    # 3. Dump raw data for inspection
+    print("\n[Step 2/7] Dumping raw data for inspection...")
     # output_pt_dump_file = os.path.join(output_dir, "platform_transactions_dump.json")
     # with open(output_pt_dump_file, 'w') as f:
     #     json.dump(platform_transactions, f, indent=4)
         
-    # Dump the checkbook payments for inspection
     # output_cp_dump_file = os.path.join(output_dir, "checkbook_payments_dump.json")
     # with open(output_cp_dump_file, 'w') as f:
     #     json.dump({
@@ -184,24 +185,23 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     #         "valid_checkbook_payments_for_received": received_matcher._valid_checkbook_payments
     #     }, f, indent=4)
         
-    # Dump all fetched bank transactions for inspection
     # all_bank_transactions = getattr(returned_matcher, 'bank_transactions', [])
     # output_bt_dump_file = os.path.join(output_dir, "bank_transactions_dump.json")
     # with open(output_bt_dump_file, 'w') as f:
     #     json.dump(all_bank_transactions, f, indent=4)
+    print(" -> Raw data dump skipped.")
 
-    # 3. Run Investigation
-    print("\n[Step 2/5] Investigating unmatched betting bank transactions...")
+    # 4. Run Investigation
+    print("\n[Step 3/7] Investigating unmatched betting bank transactions...")
     unmatched_reasons = investigate_unmatched_received(player_id, received_matcher, received_results)
-    # (Could add returned investigation here if needed)
     
     # output_investigation_file = os.path.join(output_dir, "unmatched_betting_bank_reasons.json")
     # with open(output_investigation_file, 'w') as f:
     #     json.dump(unmatched_reasons, f, indent=4)
     print(f" -> Investigation complete. Found {len(unmatched_reasons)} unmatched.")
 
-    # 4. Calculate Metrics
-    print("\n[Step 3/5] Calculating betting bank matching percentages...")
+    # 5. Calculate Metrics
+    print("\n[Step 4/7] Calculating betting bank matching percentages...")
     metrics = calculate_metrics(received_matcher, returned_matcher, platform_transactions, received_results, returned_results)
     
     # output_metrics_file = os.path.join(output_dir, "matching_summary.txt")
@@ -211,8 +211,8 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     #     f.write(f"Returned: {metrics['returned']['matched']}/{metrics['returned']['total']} ({metrics['returned']['rate']})\n")
     print(" -> Metrics calculation complete.")
     
-    # 5. Update Bank Transaction Links
-    print("\n[Step 4/5] Updating bank transaction links for matched items...")
+    # 6. Update Bank Transaction Links
+    print("\n[Step 5/7] Updating bank transaction links for matched items...")
     updated_count = 0
     for match in received_results.matches:
         bank_transaction_id = match.bank_transaction.get('transaction_id') # Changed from 'id'
@@ -229,8 +229,8 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
             updated_count += 1
     print(f" -> Update requests sent for {updated_count} matched transactions.")
 
-    # 6. Update Platform Transaction Dates
-    print("\n[Step 5/6] Syncing dates for matched transactions with different dates...")
+    # 7. Update Platform Transaction Dates
+    print("\n[Step 6/7] Syncing dates for matched transactions with different dates...")
     dates_synced_count = 0
     all_matches = received_results.matches + returned_results.matches
     for match in all_matches:
@@ -253,8 +253,8 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     print(f" -> Date sync requests sent for {dates_synced_count} transactions.")
 
 
-    # 7. Save Matched Pairs
-    print("\n[Step 6/6] Saving all matched transaction pairs...")
+    # 8. Save Matched and Unmatched Pairs
+    print("\n[Step 7/7] Saving all matched and unmatched transaction pairs...")
 
     def format_matches(matches, match_type):
         formatted = []
@@ -281,6 +281,18 @@ def run_single_player_debug(player_id, start_date_str, end_date_str):
     # output_matches_file = os.path.join(output_dir, "matched_pairs.json")
     # with open(output_matches_file, 'w') as f:
     #     json.dump(all_matches, f, indent=4)
+
+    unmatched_data = {
+        "unmatched_platform_received": received_results.unmatched_platform_transactions,
+        "unmatched_bank_for_received": received_results.unmatched_bank_transactions,
+        "unmatched_checkbook_payments": received_results.unmatched_checkbook_payments,
+        "unmatched_platform_returned": returned_results.unmatched_platform_transactions,
+        "unmatched_bank_for_returned": returned_results.unmatched_bank_transactions
+    }
+    # output_unmatched_file = os.path.join(output_dir, "unmatched_transactions.json")
+    # with open(output_unmatched_file, 'w') as f:
+    #     json.dump(unmatched_data, f, indent=4)
+        
     print(f" -> Found {len(received_results.matches)} received and {len(returned_results.matches)} returned matches to link.")
     
     print("\n" + "="*60)

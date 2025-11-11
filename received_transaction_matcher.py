@@ -78,7 +78,7 @@ class SimpleReceivedTransactionMatcher:
         """
         self.platform_transactions = platform_transactions
         self.bank_transactions = bank_transactions
-        self.user_id = user_id
+        self.user_id = int(user_id)
         self.start_date = start_date
         self.end_date = end_date
         self.checkbook_payments = self._get_checkbook_payments()
@@ -115,7 +115,7 @@ class SimpleReceivedTransactionMatcher:
         """Filters bank transactions to find potential received funds (negative amounts)."""
         return [
             bt for bt in self.bank_transactions
-            if bt.get('amount', 0) < 0 and not bt.get('transaction_link')
+            if bt.get('amount', 0) < 0 and not bt.get('linked_transaction')
         ]
 
     def _preprocess_data(self):
@@ -150,7 +150,7 @@ class SimpleReceivedTransactionMatcher:
         
         # Check description validation: either contains "fund" (case-insensitive) OR starts with "F" (case-insensitive)
         description = checkbook_payment.get('description', '').lower()
-        if not ('fund' in description or description.startswith('f') or 'initial deposit fee' in description):
+        if not ('fund' in description or description.startswith('f') or 'initial deposit fee' in description or 're payment' in description or 'profit' in description):
             return False
         
         return True
@@ -183,17 +183,16 @@ class SimpleReceivedTransactionMatcher:
             if abs(bank_amount - checkbook_amount) <= 0.01:
                 # Check description validation: either contains "fund" (case-insensitive) OR starts with "F"
                 description = cp.get('description', '').lower()
-                if 'fund' in description or description.startswith('f') or 'initial deposit fee' in description:
+                if 'fund' in description or description.startswith('f') or 'initial deposit fee' in description or 're payment' in description or 'profit' in description:
                     # Check date match: bank transaction date vs checkbook payment date (±2 days)
                     # This validates that the checkbook payment corresponds to the specific bank transaction
                     try:
                         checkbook_timestamp = cp.get('date', 0)
                         if checkbook_timestamp:
                             checkbook_date = datetime.fromtimestamp(checkbook_timestamp / 1000)
-                            # Use bank date for comparison (as requested: bank transaction vs checkbook payment)
-                            date_diff = abs((bank_date - checkbook_date).total_seconds())
-                            # Allow ±9 days tolerance (777,600 seconds = 9 days) - UPDATED
-                            if date_diff <= 777600:
+                            # Use bank date for comparison, comparing only the date part to avoid timezone issues
+                            date_diff = abs(bank_date.date() - checkbook_date.date())
+                            if date_diff <= timedelta(days=9):
                                 matching_payments.append(cp)
                     except (ValueError, TypeError):
                         # If date parsing fails, skip this payment
@@ -250,10 +249,10 @@ class SimpleReceivedTransactionMatcher:
                     checkbook_timestamp = cp.get('date', 0)
                     if checkbook_timestamp:
                         checkbook_date = datetime.fromtimestamp(checkbook_timestamp / 1000)
-                        date_diff = abs((bank_date - checkbook_date).total_seconds())
+                        date_diff = abs(bank_date.date() - checkbook_date.date())
                         
-                        if smallest_date_diff is None or date_diff < smallest_date_diff:
-                            smallest_date_diff = date_diff
+                        if smallest_date_diff is None or date_diff.total_seconds() < smallest_date_diff:
+                            smallest_date_diff = date_diff.total_seconds()
                             best_payment = cp
                 except (ValueError, TypeError):
                     continue
@@ -316,7 +315,7 @@ class SimpleReceivedTransactionMatcher:
                 
                 if bank_transaction:
                     # If the bank transaction is already linked, skip creating a new match.
-                    if bank_transaction.get('transaction_link'):
+                    if bank_transaction.get('linked_transaction'):
                         continue
 
                     # Create a direct match, bypassing all other logic
@@ -370,7 +369,7 @@ class SimpleReceivedTransactionMatcher:
                 if amount_match and date_match and bank_account_match and checkbook_payment_exists:
                     # Check if checkbook payment is already matched
                     # Note: We've already filtered out linked bank transactions, so no need to check bt again.
-                    if checkbook_payment.get('id') in matched_checkbook_payment_ids:
+                    if checkbook_payment.get('id') in self.used_checkbook_payment_ids:
                         continue
                     
                     # Calculate date difference for prioritization
@@ -476,7 +475,7 @@ class SimpleReceivedTransactionMatcher:
         
         unmatched_checkbook_payments = [
             cp for cp in self._valid_checkbook_payments 
-            if cp.get('id') not in matched_checkbook_payment_ids
+            if cp.get('id') not in self.used_checkbook_payment_ids
         ]
         
         return MatchResults(

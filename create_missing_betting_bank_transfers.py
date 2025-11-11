@@ -113,7 +113,7 @@ def find_orphan_transactions(player_id: int):
     # Filter for orphan transactions
     for bt in bank_transactions:
         is_orphan = not bt.get('linked_transaction')
-        is_positive = bt.get('amount', 0) > 0
+        is_significant_transfer = bt.get('amount', 0) > 2
         
         try:
             transaction_date = datetime.strptime(bt.get('date', ''), '%Y-%m-%d')
@@ -130,7 +130,7 @@ def find_orphan_transactions(player_id: int):
         description = bt.get('name', '').lower()
         matches_keyword = any(re.search(k, description) for k in BETTING_BANK_TRANSFER_KEYWORDS)
 
-        if is_orphan and is_positive and is_older_than_15_days and matches_keyword:
+        if is_orphan and is_significant_transfer and is_older_than_15_days and matches_keyword:
             from_account = source_account # We've already found the correct account
             
             if not from_account:

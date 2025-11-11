@@ -220,9 +220,12 @@ def get_old_unlinked_paypal_transactions(player_id: int) -> List[Dict[str, Any]]
         if len(all_unlinked_from_api) != len(truly_unlinked):
             print(f"    - INFO: Filtered out {len(all_unlinked_from_api) - len(truly_unlinked)} BTs that were already linked.")
 
+        # Filter for transactions with an amount greater than 2
+        amount_filtered = [bt for bt in truly_unlinked if bt.get('amount', 0) > 2]
+
         # Filter by keywords client-side
         keyword_filtered = [
-            bt for bt in truly_unlinked
+            bt for bt in amount_filtered
             if any(re.search(k, bt.get('name', '').lower()) for k in BETTING_PAYPAL_KEYWORDS)
         ]
 

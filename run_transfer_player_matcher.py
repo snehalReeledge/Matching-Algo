@@ -61,7 +61,7 @@ def run_matcher_for_player(player_id, delay_seconds=0, no_debug_files=False):
     ]
 
     if not relevant_transfers:
-        print(f"  -> No relevant transfer transactions found for Player ID: {player_id}. Skipping.")
+        # print(f"  -> No relevant transfer transactions found for Player ID: {player_id}. Skipping.")
         return None # Return None to indicate no processing was done
         
     bank_transactions = get_all_bank_transactions(player_id)
@@ -70,24 +70,13 @@ def run_matcher_for_player(player_id, delay_seconds=0, no_debug_files=False):
         print("Could not fetch bank transactions. Exiting.")
         return None
 
-    # --- 2. Create the output directory and save raw data for debugging ---
-    output_dir = None
-    if not no_debug_files:
-        today_str = datetime.now().strftime('%Y_%m_%d')
-        base_debug_dir = f"@debug_transfers_{today_str}"
-        output_dir = os.path.join(base_debug_dir, f"player_{player_id}_investigation")
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Save raw platform transactions BEFORE matching
-        with open(os.path.join(output_dir, f"platform_transactions_{player_id}_raw.json"), 'w') as f:
-            json.dump(platform_transactions, f, indent=2)
-
-    # --- 3. Run the matcher ---
+    # --- 2. Run the matcher ---
     matcher = TransferTransactionMatcher(platform_transactions, bank_transactions)
     results = matcher.match_transactions()
     
-    # --- 4. Prepare and execute actions based on matches ---
-    print(f"  -> Found {len(results.simple_matches)} simple matches to execute.")
+    # --- 3. Prepare and execute actions based on matches ---
+    if len(results.simple_matches) > 0:
+        print(f"  -> Found {len(results.simple_matches)} simple matches to execute.")
     
     # Simple Matches
     for match in results.simple_matches:
@@ -116,50 +105,62 @@ def run_matcher_for_player(player_id, delay_seconds=0, no_debug_files=False):
             }
             update_platform_transaction(pt.get('id'), update_payload)
         
-    # --- 5. Write output files if not disabled ---
-    if not no_debug_files and output_dir:
-        try:
-            # proposed_actions.json
-            proposed_actions = []
-            for match in results.simple_matches:
-                proposed_actions.append({
-                    "action": "LINK_SIMPLE",
-                    "platform_transaction_id": match.platform_transaction.get('id'),
-                    "bank_transaction_id": match.bank_transaction.get('id')
-                })
-            with open(os.path.join(output_dir, "proposed_actions.json"), 'w') as f:
-                json.dump(proposed_actions, f, indent=4)
+    # --- 4. Write output files if not disabled and if there are matches ---
+    # if not no_debug_files and len(results.simple_matches) > 0:
+    #     # Create a directory for the investigation reports
+    #     today_str = datetime.now().strftime('%Y_%m_%d')
+    #     base_debug_dir = f"@debug_transfers_{today_str}"
+    #     output_dir = os.path.join(base_debug_dir, f"player_{player_id}_investigation")
+    #     os.makedirs(output_dir, exist_ok=True)
+
+    #     # Save raw platform transactions
+    #     with open(os.path.join(output_dir, f"platform_transactions_{player_id}_raw.json"), 'w') as f:
+    #         json.dump(platform_transactions, f, indent=2, cls=DateTimeEncoder)
+
+    #     try:
+    #         # proposed_actions.json
+    #         proposed_actions = []
+    #         for match in results.simple_matches:
+    #             proposed_actions.append({
+    #                 "action": "LINK_SIMPLE",
+    #                 "platform_transaction_id": match.platform_transaction.get('id'),
+    #                 "bank_transaction_id": match.bank_transaction.get('id')
+    #             })
+    #         with open(os.path.join(output_dir, "proposed_actions.json"), 'w') as f:
+    #             json.dump(proposed_actions, f, indent=4)
             
-            # summary.txt
-            summary_path = os.path.join(output_dir, "matching_summary.txt")
-            with open(summary_path, 'w') as f:
-                f.write(f"--- Matching Summary for Player ID: {player_id} ---\n")
-                f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                f.write(f"Total Platform Transactions Fetched: {len(platform_transactions)}\n")
-                f.write(f"Total Bank Transactions Fetched: {len(bank_transactions)}\n\n")
-                f.write(f"Simple Matches Found: {len(results.simple_matches)}\n")
-                f.write(f"Unmatched Platform Transfers: {len(results.unmatched_platform_transactions)}\n")
+    #         # summary.txt
+    #         summary_path = os.path.join(output_dir, "matching_summary.txt")
+    #         with open(summary_path, 'w') as f:
+    #             f.write(f"--- Matching Summary for Player ID: {player_id} ---\n")
+    #             f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    #             f.write(f"Total Platform Transactions Fetched: {len(platform_transactions)}\n")
+    #             f.write(f"Total Bank Transactions Fetched: {len(bank_transactions)}\n\n")
+    #             f.write(f"Simple Matches Found: {len(results.simple_matches)}\n")
+    #             f.write(f"Unmatched Platform Transfers: {len(results.unmatched_platform_transactions)}\n")
                 
-            # unmatched_analysis.json
-            unmatched_output = []
-            for unmatched in results.unmatched_platform_transactions:
-                unmatched_output.append({
-                    "platform_transaction": unmatched.platform_transaction,
-                    "reason": unmatched.reason
-                })
+    #         # unmatched_analysis.json
+    #         unmatched_output = []
+    #         for unmatched in results.unmatched_platform_transactions:
+    #             unmatched_output.append({
+    #                 "platform_transaction": unmatched.platform_transaction,
+    #                 "reason": unmatched.reason
+    #             })
             
-            analysis_path = os.path.join(output_dir, "unmatched_analysis.json")
-            with open(analysis_path, 'w') as f:
-                json.dump(unmatched_output, f, indent=4, cls=DateTimeEncoder)
+    #         analysis_path = os.path.join(output_dir, "unmatched_analysis.json")
+    #         with open(analysis_path, 'w') as f:
+    #             json.dump(unmatched_output, f, indent=4, cls=DateTimeEncoder)
             
-            print(f"  -> Successfully created investigation report in: {output_dir}")
+    #         print(f"  -> Successfully created investigation report in: {output_dir}")
 
-        except IOError as e:
-            print(f"Error writing output files: {e}")
+    #     except IOError as e:
+    #         print(f"Error writing output files: {e}")
 
-    print(f"--- Matcher Finished for Player ID: {player_id} ---")
+    # Only print the finished message if we started it
+    if len(results.simple_matches) > 0:
+        print(f"--- Matcher Finished for Player ID: {player_id} ---")
     
-    # --- 6. Return a summary for consolidated reporting ---
+    # --- 5. Return a summary for consolidated reporting ---
     return {
         "player_id": player_id,
         "summary": {
@@ -218,14 +219,14 @@ if __name__ == "__main__":
         print("\n--- Batch processing complete. ---")
 
         # --- Save consolidated report ---
-        if batch_results:
-            today_str = datetime.now().strftime('%Y_%m_%d_%H%M%S')
-            report_filename = f"consolidated_report_{today_str}.json"
-            with open(report_filename, 'w') as f:
-                json.dump(batch_results, f, indent=4, cls=DateTimeEncoder)
-            print(f"✅ Consolidated report saved to: {report_filename}")
-        else:
-            print("No results to report.")
+        # if batch_results:
+        #     today_str = datetime.now().strftime('%Y_%m_%d_%H%M%S')
+        #     report_filename = f"consolidated_report_{today_str}.json"
+        #     with open(report_filename, 'w') as f:
+        #         json.dump(batch_results, f, indent=4, cls=DateTimeEncoder)
+        #     print(f"✅ Consolidated report saved to: {report_filename}")
+        # else:
+        #     print("No results to report.")
 
     else:
         print("No players found for the specified stage. Exiting.")

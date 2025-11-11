@@ -91,7 +91,7 @@ class SimpleTransactionMatcher:
         self._potential_bank_transactions = []
         for bt in self.bank_transactions:
             # If the bank transaction is already linked, skip it to preserve the existing match.
-            if bt.get('transaction_link'):
+            if bt.get('linked_transaction'):
                 continue
 
             if bt.get('amount', 0) > 0:  # Only positive amounts
@@ -146,7 +146,7 @@ class SimpleTransactionMatcher:
                 
                 if bank_transaction:
                     # If the bank transaction is already linked, skip creating a new match.
-                    if bank_transaction.get('transaction_link'):
+                    if bank_transaction.get('linked_transaction'):
                         continue
                         
                     match_criteria = MatchCriteria(
