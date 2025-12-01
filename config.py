@@ -15,6 +15,10 @@ CREATE_PLATFORM_TRANSACTION_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1Z
 SCRAPED_TRANSACTION_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:8LbPEFvA/getUserScrapedTransactions"
 USER_ACCOUNTS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getUserAccounts" #561
 DELETE_PLATFORM_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/transactions"
+CASINOACCOUNTS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:1ZwRS-f0/getCasinoAccounts"
+UPDATE_CASINO_ACCOUNTS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:clWeqHId/updatePlayPlusCasinoAccounts"
+UPDATE_SCRAPED_TRANSACTIONS_API_URL = "https://xhks-nxia-vlqr.n7c.xano.io/api:clWeqHId/scrapedtransactions/{id}"
+
 # API Settings
 API_TIMEOUT = 30  # API timeout in seconds
 

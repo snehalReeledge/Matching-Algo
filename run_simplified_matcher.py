@@ -32,29 +32,39 @@ from config import (
 )
 
 # --- Helper Functions ---
-def get_player_ids_by_stage(stage: str) -> list[int]:
-    """Fetches all players and filters them to get a list of IDs for a given player stage."""
-    player_ids = []
-    print(f"Fetching players for stage: '{stage}'...")
+def get_player_ids_by_stages(stages: list[str]) -> list[int]:
+    """Fetches all players and filters them to get a list of IDs for given player stages."""
+    all_player_ids = []
+    print(f"Fetching players for stages: {stages}...")
     try:
         response = requests.get(PLAYERS_API_URL)
         response.raise_for_status()
         players = response.json()
-        
+
         if not players:
             print("No players found from the API.")
             return []
-            
-        # Filter players by the specified stage
-        player_ids = [p['id'] for p in players if p.get('player_stage') == stage and p.get('id')]
-        
-        if not player_ids:
-            print(f"No players found for stage '{stage}'.")
+
+        # Filter players by the specified stages
+        for stage in stages:
+            stage_players = [p['id'] for p in players if p.get('player_stage') == stage and p.get('id')]
+            if stage_players:
+                print(f"Found {len(stage_players)} players for stage '{stage}'.")
+                all_player_ids.extend(stage_players)
+            else:
+                print(f"No players found for stage '{stage}'.")
+
+        # Remove duplicates and sort
+        all_player_ids = list(set(all_player_ids))
+        all_player_ids.sort()
+
+        if all_player_ids:
+            print(f"Total unique players across all stages: {len(all_player_ids)}")
         else:
-            print(f"Found {len(player_ids)} players for stage '{stage}'.")
-            
-        return player_ids
-        
+            print("No players found for any of the specified stages.")
+
+        return all_player_ids
+
     except requests.RequestException as e:
         print(f"Error fetching players: {e}")
         return []
@@ -177,6 +187,11 @@ def run_matching_for_player(player_id: int, base_output_dir: str, delay_seconds:
     bank_transactions = get_all_bank_transactions(player_id)
     scraped_transactions = get_scraped_transactions(player_id)
     
+    # Optimization: Skip if there are no transactions to process
+    if not platform_transactions or (not bank_transactions and not scraped_transactions):
+        print(f"  No transactions to match for player {player_id}. Skipping.")
+        return 0
+    
     # Save raw data for inspection
     # raw_data_dir = os.path.join(output_dir, "raw_data")
     # os.makedirs(raw_data_dir, exist_ok=True)
@@ -261,16 +276,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the simplified PayPal to Bank matcher.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--player-ids", nargs='+', type=int, help="One or more player IDs to process.")
-    group.add_argument("--player-stage", type=str, help="The player stage to process (e.g., 'Batch 1').")
+    group.add_argument("--player-stages", nargs='+', type=str, help="One or more player stages to process (e.g., 'Batch 1' 'Batch 2').")
     parser.add_argument("--dry-run", action="store_true", help="Run the matcher without executing any transactions (read-only).")
     parser.add_argument("--max-workers", type=int, default=5, help="Maximum number of concurrent players to process.")
     parser.add_argument("--delay", type=int, default=2, help="Delay in seconds between starting each player's task.")
-    
+
     args = parser.parse_args()
 
     player_ids_to_process = []
-    if args.player_stage:
-        player_ids_to_process = get_player_ids_by_stage(args.player_stage)
+    if args.player_stages:
+        player_ids_to_process = get_player_ids_by_stages(args.player_stages)
     elif args.player_ids:
         player_ids_to_process = args.player_ids
     
