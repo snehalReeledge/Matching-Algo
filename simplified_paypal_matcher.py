@@ -97,6 +97,51 @@ class SimplifiedPayPalMatcher:
             bt for bt in self.bank_transactions if not bt.get('linked_transaction')
         ]
 
+        # Build Bank Transaction Index: (account_id, amount) -> List[bt]
+        self.bank_index = {}
+        for bt in self.bank_transactions:
+            # Pre-parse date for faster comparison
+            if isinstance(bt.get('date'), str):
+                try:
+                    bt['parsed_date'] = datetime.strptime(bt.get('date'), '%Y-%m-%d')
+                except ValueError:
+                    continue # Skip invalid dates
+            
+            key = (bt.get('bankaccount_id'), round(bt.get('amount', 0), 2))
+            if key not in self.bank_index:
+                self.bank_index[key] = []
+            self.bank_index[key].append(bt)
+
+        # Build Scraped Transaction Indexes
+        self.scraped_gross_index = {}
+        self.scraped_net_index = {}
+        for st in self.scraped_transactions:
+            if isinstance(st.get('Transaction Date'), str):
+                try:
+                    st['parsed_date'] = datetime.strptime(st.get('Transaction Date'), '%Y-%m-%d')
+                except ValueError:
+                    continue
+
+            gross = st.get('Gross')
+            if gross is not None:
+                try:
+                    g_val = round(abs(float(gross)), 2)
+                    if g_val not in self.scraped_gross_index:
+                        self.scraped_gross_index[g_val] = []
+                    self.scraped_gross_index[g_val].append(st)
+                except ValueError:
+                    pass
+            
+            net = st.get('Net')
+            if net is not None:
+                try:
+                    n_val = round(abs(float(net)), 2)
+                    if n_val not in self.scraped_net_index:
+                        self.scraped_net_index[n_val] = []
+                    self.scraped_net_index[n_val].append(st)
+                except ValueError:
+                    pass
+
     def match_transactions(self) -> MatchResults:
         """
         Step 2: Iterates through platform transactions and attempts to find a match.
@@ -106,8 +151,8 @@ class SimplifiedPayPalMatcher:
         three_way_matches = []
         unmatched_info = []
         
-        # Create a mutable list of bank transactions that can be consumed as matches are found
-        available_bts = self.bank_transactions[:]
+        # Track used bank transaction IDs to prevent double usage
+        used_bt_ids = set()
         
         # Create a set of PT IDs that have been matched to avoid processing them twice
         matched_pt_ids = set()
@@ -117,26 +162,25 @@ class SimplifiedPayPalMatcher:
                 continue
 
             # Priority 1: Attempt to find a three-way match involving fees.
-            three_way_match = self._find_three_way_match(pt, available_bts)
+            three_way_match = self._find_three_way_match(pt, used_bt_ids)
             if three_way_match:
                 three_way_matches.append(three_way_match)
                 matched_pt_ids.add(pt.get('id'))
-                # Remove the consumed bank transactions from the available pool
-                if three_way_match.paypal_bank_transaction and three_way_match.paypal_bank_transaction in available_bts:
-                    available_bts.remove(three_way_match.paypal_bank_transaction)
-                if three_way_match.bank_side_transaction and three_way_match.bank_side_transaction in available_bts:
-                    available_bts.remove(three_way_match.bank_side_transaction)
+                # Mark bank transactions as used
+                if three_way_match.paypal_bank_transaction:
+                    used_bt_ids.add(three_way_match.paypal_bank_transaction.get('id'))
+                if three_way_match.bank_side_transaction:
+                    used_bt_ids.add(three_way_match.bank_side_transaction.get('id'))
                 continue
 
             # Priority 2: If no three-way match, attempt a simple match.
-            simple_match = self._find_simple_match(pt, available_bts)
+            simple_match = self._find_simple_match(pt, used_bt_ids)
             if simple_match:
                 simple_matches.append(simple_match)
                 matched_pt_ids.add(pt.get('id'))
-                # Remove the consumed bank transactions from the available pool
+                # Mark bank transactions as used
                 for bt in simple_match.bank_transactions:
-                    if bt in available_bts:
-                        available_bts.remove(bt)
+                    used_bt_ids.add(bt.get('id'))
                 continue
         
         # Add any remaining, unprocessed platform transactions to the unmatched list
@@ -149,7 +193,7 @@ class SimplifiedPayPalMatcher:
 
         return MatchResults(simple_matches, three_way_matches, unmatched_info)
 
-    def _find_three_way_match(self, pt: Dict[str, Any], available_bts: List[Dict[str, Any]]) -> ThreeWayMatch:
+    def _find_three_way_match(self, pt: Dict[str, Any], used_bt_ids: set) -> ThreeWayMatch:
         """
         Attempts to find a three-way match for a given platform transaction.
         """
@@ -163,8 +207,17 @@ class SimplifiedPayPalMatcher:
         to_bank_account_id = pt.get('to', {}).get('bankaccount_id')
 
         # 1. Verify with Scraped Data
-        # Find a scraped transaction that matches the gross amount
-        for st in self.scraped_transactions:
+        # Find a scraped transaction that matches the gross amount or net amount
+        candidates = []
+        if pt_amount in self.scraped_gross_index:
+            candidates.extend(self.scraped_gross_index[pt_amount])
+        if pt_amount in self.scraped_net_index:
+            for st in self.scraped_net_index[pt_amount]:
+                # Simple deduplication if object identity is preserved
+                if st not in candidates:
+                    candidates.append(st)
+
+        for st in candidates:
             # Gracefully handle cases where 'Gross' might be None
             gross_amount_str = st.get('Gross')
             if gross_amount_str is None:
@@ -172,11 +225,12 @@ class SimplifiedPayPalMatcher:
 
             st_gross = round(abs(float(gross_amount_str)), 2)
             st_net = round(abs(float(st.get('Net', 0))), 2)
-            st_date = datetime.strptime(st.get('Transaction Date'), '%Y-%m-%d')
+            st_date = st.get('parsed_date') # Use pre-parsed date
+            if not st_date:
+                 continue
 
-            # Check if the platform transaction amount matches either the gross or net amount
-            # and if the dates are within a reasonable window (e.g., 7 days)
-            if (pt_amount == st_gross or pt_amount == st_net) and abs((st_date - pt_date).days) <= 7:
+            # Check if dates are within a reasonable window (e.g., 7 days)
+            if abs((st_date - pt_date).days) <= 7:
                 
                 # 2. Check for Fees
                 fee_amount = round(st_gross - st_net, 2)
@@ -187,7 +241,7 @@ class SimplifiedPayPalMatcher:
                         account_id=from_bank_account_id,
                         amount=st_gross,
                         date=st_date,
-                        bts_pool=available_bts
+                        used_bt_ids=used_bt_ids
                     )
                     
                     # 4. Find the Bank-Side Transaction (matching the net amount)
@@ -195,7 +249,7 @@ class SimplifiedPayPalMatcher:
                         account_id=to_bank_account_id,
                         amount=-st_net, # Bank deposits are negative
                         date=st_date,
-                        bts_pool=available_bts
+                        used_bt_ids=used_bt_ids
                     )
 
                     # If the gross leg (PayPal side) is found, and a fee exists, we have enough confidence to proceed.
@@ -212,7 +266,7 @@ class SimplifiedPayPalMatcher:
                         )
         return None
 
-    def _find_simple_match(self, pt: Dict[str, Any], available_bts: List[Dict[str, Any]]) -> SimpleMatch:
+    def _find_simple_match(self, pt: Dict[str, Any], used_bt_ids: set) -> SimpleMatch:
         """
         Attempts to find a simple one-to-one or one-to-two match for a platform transaction.
         """
@@ -227,7 +281,7 @@ class SimplifiedPayPalMatcher:
             account_id=from_bank_account_id,
             amount=pt_amount,
             date=pt_date,
-            bts_pool=available_bts,
+            used_bt_ids=used_bt_ids,
             keywords=BETTING_PAYPAL_KEYWORDS
         )
         if paypal_side_bt:
@@ -238,7 +292,7 @@ class SimplifiedPayPalMatcher:
             account_id=to_bank_account_id,
             amount=-pt_amount,
             date=pt_date,
-            bts_pool=available_bts,
+            used_bt_ids=used_bt_ids,
             keywords=BETTING_BANK_TRANSFER_KEYWORDS
         )
         if bank_side_bt:
@@ -254,20 +308,33 @@ class SimplifiedPayPalMatcher:
             )
         return None
 
-    def _find_bank_transaction(self, account_id: int, amount: float, date: datetime, bts_pool: List[Dict[str, Any]], keywords: List[str] = None) -> Dict[str, Any]:
+    def _find_bank_transaction(self, account_id: int, amount: float, date: datetime, used_bt_ids: set, keywords: List[str] = None) -> Dict[str, Any]:
         """A helper to find a single bank transaction that meets the criteria."""
         target_amount = round(amount, 2)
-        for bt in bts_pool:
-            if bt.get('bankaccount_id') == account_id and round(bt.get('amount', 0), 2) == target_amount:
-                bt_date = datetime.strptime(bt.get('date'), '%Y-%m-%d')
-                if abs((bt_date - date).days) <= 7:
-                    if keywords:
-                        description = bt.get('name', '').lower()
-                        if any(re.search(k, description) for k in keywords):
-                            return bt
-                    else:
-                        # If no keywords are provided, amount, date, and account are enough
+        
+        # Use index for O(1) lookup of candidates
+        key = (account_id, target_amount)
+        if key not in self.bank_index:
+            return None
+            
+        candidates = self.bank_index[key]
+        
+        for bt in candidates:
+            if bt.get('id') in used_bt_ids:
+                continue
+
+            bt_date = bt.get('parsed_date')
+            if not bt_date:
+                 continue
+
+            if abs((bt_date - date).days) <= 7:
+                if keywords:
+                    description = bt.get('name', '').lower()
+                    if any(re.search(k, description) for k in keywords):
                         return bt
+                else:
+                    # If no keywords are provided, amount, date, and account are enough
+                    return bt
         return None
 
 # --- Data Fetching Functions (to be used by the runner script) ---

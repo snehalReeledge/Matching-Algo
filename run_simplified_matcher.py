@@ -183,9 +183,14 @@ def run_matching_for_player(player_id: int, base_output_dir: str, delay_seconds:
     # os.makedirs(output_dir, exist_ok=True)
     
     # 1. Fetch Data
-    platform_transactions = get_all_platform_transactions(player_id)
-    bank_transactions = get_all_bank_transactions(player_id)
-    scraped_transactions = get_scraped_transactions(player_id)
+    with ThreadPoolExecutor(max_workers=3) as data_executor:
+        future_pt = data_executor.submit(get_all_platform_transactions, player_id)
+        future_bt = data_executor.submit(get_all_bank_transactions, player_id)
+        future_st = data_executor.submit(get_scraped_transactions, player_id)
+        
+        platform_transactions = future_pt.result()
+        bank_transactions = future_bt.result()
+        scraped_transactions = future_st.result()
     
     # Optimization: Skip if there are no transactions to process
     if not platform_transactions or (not bank_transactions and not scraped_transactions):
@@ -278,7 +283,7 @@ if __name__ == "__main__":
     group.add_argument("--player-ids", nargs='+', type=int, help="One or more player IDs to process.")
     group.add_argument("--player-stages", nargs='+', type=str, help="One or more player stages to process (e.g., 'Batch 1' 'Batch 2').")
     parser.add_argument("--dry-run", action="store_true", help="Run the matcher without executing any transactions (read-only).")
-    parser.add_argument("--max-workers", type=int, default=5, help="Maximum number of concurrent players to process.")
+    parser.add_argument("--max-workers", type=int, default=10, help="Maximum number of concurrent players to process.")
     parser.add_argument("--delay", type=int, default=2, help="Delay in seconds between starting each player's task.")
 
     args = parser.parse_args()
